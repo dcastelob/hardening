@@ -1,20 +1,24 @@
 #!/bin/bash
 # gerador de html
 
-RELATORIO=relatorio.html
+#RELATORIO=relatorio.html  
 
 function header()
 {
 	echo "<html>"
 	echo '<meta charset="utf-8"/>'
+	echo "<head>"	
 	echo '<style type="text/css">' 
 	echo '	.tg  {border-collapse:collapse;border-spacing:0;;width:70%;}'
 	echo '	.tg td{font-family:Arial, sans-serif;font-size:14px;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;}'
 	#echo '	.tg th{font-family:Arial, sans-serif;font-size:14px;font-weight:normal;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;}'
-	echo '	.tg th{border-style:solid;border-width:1px;overflow:hidden;word-break:normal;font-family:monospace, Courier;text-align: justify; font-size:12px;line-height: 0.8;}'
+	echo '	.tg th{border-style:solid;border-width:1px;overflow:hidden;word-break:normal;font-family:Courier;text-align: justify; font-size:14px;line-height: 1.0;}'
 	echo '	.tg .tg-yw4l{vertical-align:top}'
-	echo ' td_cmd {font-family:monospace, Courier;font-size:14px;text-align: justify;}'
+	#echo ' td_cmd {font-family:monospace, Courier;font-size:14px;text-align: justify;}'
+	echo ' td_cmd {font-family:monospace, ti92pluspc;font-size:14px;text-align: justify;}'
+	echo '  p {margin: 0;}'
 	echo '</style>'
+	echo "</head>"
 }
 
 
@@ -31,6 +35,11 @@ function h1()
 function h2()
 {
 	echo "<h2>$1</h2>"
+}
+
+function h3()
+{
+	echo "<h3>$1</h3>"
 }
 
 function linha()
@@ -217,8 +226,8 @@ function gerarRelatorio()
 	echo > "$RELATORIO"
 	header >> "$RELATORIO"
 	h1 "RESUMO DA MAQUINA" >> "$RELATORIO"
-	h2 "Fonte dos dados: $1" >> "$RELATORIO"
-	h2 "Relatório gerado: $2" >> "$RELATORIO"
+	h3 "Fonte dos dados: $1" >> "$RELATORIO"
+	h3 "Relatório gerado: $2" >> "$RELATORIO"
 
 	IFS_OLD=$IFS
 	IFS=$'\n'
@@ -230,16 +239,18 @@ function gerarRelatorio()
 	#	SUB_CATEGORIA=$(echo $ITEM| cut -d";" -f3)
 	
 		CATEGORIA="$ITEM"
+		
+		# Escolhedo o tipo de foramtação de dados o resultado será gerado no html
 		case "$CATEGORIA" in
 
 
-			"LISTA_PACOTES"|"ATUALIZACOES"|"REPOSITORIO_ATIVO"|"RELACAO_USUARIOS"|RELACAO_GRUPOS)
+			"LISTA_PACOTES"|"ATUALIZACOES"|"REPOSITORIO_ATIVO"|"RELACAO_USUARIOS"|"RELACAO_GRUPOS"|"HOSTS_FILE"|"ROTAS"|"AGENDAMENTOS"|"CRONTAB_EXTRAS"|"LIMITES_SISTEMA"|"LIMITS.CONF"|"LIMITS.D"|"RC.LOCAL"|"PROCESSOS")
 							geraListaSimples "$CATEGORIA"
 							;;
 			asasa)
 							geraLista "$CATEGORIA"
 							;;				
-			"CABECALHO"|"SERVICOS_ATIVOS"|"OCUPACAO_DISCOS"|"MEMORIA_FISICA"|"MEMORIA_SWAP"|"TESTA_PERMISSOES_ARQUIVOS_ESPECIAIS"|"ESCRITA_PARA_OUTROS"|"PERMISSOES_HOME"|"TESTE_DNS")
+			"CABECALHO"|"SERVICOS_ATIVOS"|"OCUPACAO_DISCOS"|"MEMORIA_FISICA"|"MEMORIA_SWAP"|"MEMORIA_RAM"|"TESTA_PERMISSOES_ARQUIVOS_ESPECIAIS"|"ESCRITA_PARA_OUTROS"|"PERMISSOES_HOME"|"TESTE_DNS"|"01-SELINUX")
 							geraListaSubcategorizada "$CATEGORIA"
 							;;
 			*) 
