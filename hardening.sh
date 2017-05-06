@@ -45,6 +45,7 @@ function status()
 {
 	echo "[ INFO ] $(date "+%x %T") -"
 }
+
 function gera_log ()
 {	
 	MENSAGEM="$1"	
@@ -100,7 +101,8 @@ function cabecalho()
 
 #	gera_log2 "$FUNCAO" "INFO" "Endereço IP do computador" "$(ip a | grep "inet "| awk '{print $2";"$7,$8";"}'| grep -v "127.0.0.1/8")"
 	gera_log2 "$FUNCAO" "INFO" "Endereço IP do computador" "$(ip a | grep "inet "| awk '{print $2" ("$7,$8");"}'| grep -v "127.0.0.1/8"| tr '\n' ' '; echo)"
-	gera_log2 "$FUNCAO" "INFO" "Versão do Kernel" "$(uname -r)"	
+	gera_log2 "$FUNCAO" "INFO" "Versão do Kernel" "$(uname -r)"
+	gera_log2 "$FUNCAO" "INFO" "Arquitetura" "$(arch)"	
 }
 
 function getLinuxVersion()
@@ -212,9 +214,7 @@ function getLimits()
 					cat $dir/$file | grep -v "^#" | grep -v "^$" ; 
 				done; 
 			done | tr '\n' ';'; echo)		
-	gera_log2 "$FUNCAO" "INFO" "Extras do /etc/security/limits.d.*" "$DADOS"
-	
-	
+	gera_log2 "$FUNCAO" "INFO" "Extras do /etc/security/limits.d.*" "$DADOS"	
 			
 }
 
@@ -251,10 +251,10 @@ function getCrontab()
 			
 }
 
-function servico_ativos()
+function getOpenPorts()
 {
 	echo "$(status) Obtendo lista de serviços ativos..."
-	export FUNCAO="SERVICOS_ATIVOS"		
+	export FUNCAO="PORTAS_ABERTAS"		
 	PORTAS=$(ss -putan4 | grep LISTEN | awk '{print $5"/"$1}'| awk -F":" '{print $2}')
 	# echo $PORTAS   # debug
 	for i in ${PORTAS}; do
@@ -264,6 +264,31 @@ function servico_ativos()
 	done
 	
 }
+
+function getServicesEnabled()
+{
+    export FUNCAO="SERVIÇOS_ATIVOS_NO_BOOT"
+	echo "$(status) Obtendo informações de serviços ativos no boot..."
+    DISTRO="$1"
+    case "$DISTRO" in
+        "DEB")
+            #apt list --upgradable 2> /dev/null
+            #apt-get update && \
+            RESP=\"$(apt-get -V upgrade --assume-no | grep "("| sed 's/[)(=>]//g' | awk '{print $1";"$2";"$3}'| tr '\n' ';'; echo)\"
+            ;;
+        "RPM")
+        	#RHEL antigos
+            RESP=$(chkconfig --list 2>/dev/null;echo "<br/>")
+            RESP=$RESP"Detaul target: "$(systemctl get-default;echo "<br/>")
+            RESP=$RESP$(systemctl list-units --type=service)
+            RESP=$(echo "$RESP"| tr '\n' ';'; echo)
+            ;;    
+    esac
+
+    gera_log2 "$FUNCAO" "INFO" "Serviços ativo no boot" "$RESP"
+    
+}
+
 
 function ocupacaoDiscos()
 {
@@ -601,6 +626,51 @@ function getRepoList()
 			
 }
 
+function AnaliseRepo()
+{
+	# apenas para RHEL
+	export FUNCAO="ANALISE_GPG_REPOSITORIO"
+	echo "$(status) Analisando chaves gpg repositórios ativos..."
+	
+	
+	FILES=$(ls /etc/yum.repos.d/)
+	for file in $FILES; do
+		IFSOLD="$IFS"
+		IFS=";"
+		REPO=""
+		CONT=1
+		STATUS="SUCESSO"
+		for i in $(cat /etc/yum.repos.d/$file | tr "\n" ";"| sed "s/\[/\n\[/g"| grep "enabled=1"); do 
+			#REPO="$REPO"$(echo -e "ARQUIVO: /etc/yum.repos.d/$file\n"; echo "$i" | egrep "\[|^name|enabled|gpgcheck|gpgkey" | tr '\n' ';'; echo)
+			#if [ "$CONT" -eq 1 ]; then
+			#	REPO="$REPO"$(echo -e "<b>ARQUIVO: /etc/yum.repos.d/$file</b><br/>\n")
+			#fi
+			REPO="$REPO"$(echo "$i" | egrep "\[|^name|gpgcheck|gpgkey" | tr '\n' ';'; echo )
+			CONT=$(($CONT+1))
+			
+			GPGCHECK=""
+			GPGCHECK=$(echo "$REPO" | grep "gpgcheck=0")
+			
+			if [ -n "$GPGCHECK" ];then
+				STATUS="FALHA"
+			fi
+			
+		done
+		if [ -n "$REPO" ]; then
+				#echo "$REPO"
+				gera_log2 "$FUNCAO" "$STATUS" "repo: etc/yum.repos.d/$file" "$REPO"
+		fi
+		IFS="$IFSOLD"
+		
+		
+	done
+
+	# adicionando um enter após os dados
+	#REPO="$REPO"$(echo '<br />')
+	#gera_log2 "$FUNCAO" "INFO" "Analise dos Repositórios ativos" "$REPO"
+			
+}
+
 
 function getPackage2UpgradeCorretivo()
 {
@@ -621,6 +691,198 @@ function getPackage2UpgradeCorretivo()
     
 }
 
+function get_tmp_filesystem()
+{
+	echo "$(status) Analizando sistema de arquivo /tmp..."
+	export FUNCAO="TESTE_TMP"
+	TESTE="/tmp"
+	PARTICAO=$(mount | grep "$TESTE")
+	if [ -z "$PARTICAO" ];then
+		gera_log2 "$FUNCAO" "FALHA" "Partição $TESTE não está em fiesystem separado"
+		return 1 
+	fi
+		
+	#OPT=$(mount | grep /home | egrep -o "([(]).([a-Z, =\)])*"| sed 's/)//g;s/(//g')
+	OPT="rw,nosuid,nodev,noexec,relatime"
+	for i in ${OPT}; do
+		RESULT=$(echo $PARTICAO | grep "$i")
+		if [ -z "$RESULT" ];then
+			gera_log2 "$FUNCAO" "FALHA" "Diretorio: $TESTE não possui o atributo: $i" 
+		else
+			gera_log2 "$FUNCAO" "SUCESSO" "Diretorio: $TESTE possui o atributo: $i"  	
+		fi		
+	done	
+}
+
+function get_var_tmp_filesystem()
+{
+	echo "$(status) Analizando sistema de arquivo /var/tmp..."
+	export FUNCAO="TESTE_VAR_TMP"
+	TESTE="/var/tmp"
+	PARTICAO=$(mount | grep "$TESTE")
+	if [ -z "$PARTICAO" ];then
+		gera_log2 "$FUNCAO" "FALHA" "Partição $TESTE não está em fiesystem separado"
+		return 1 
+	fi
+		
+	#OPT=$(mount | grep /home | egrep -o "([(]).([a-Z, =\)])*"| sed 's/)//g;s/(//g')
+	OPT="rw,nosuid,nodev,noexec,relatime"
+	for i in ${OPT}; do
+		RESULT=$(echo $PARTICAO | grep "$i")
+		if [ -z "$RESULT" ];then
+			gera_log2 "$FUNCAO" "FALHA" "Diretorio: $TESTE não possui o atributo: $i" 
+		else
+			gera_log2 "$FUNCAO" "SUCESSO" "Diretorio: $TESTE possui o atributo: $i"  	
+		fi		
+	done
+	
+}
+
+function get_var_log_filesystem()
+{
+	echo "$(status) Analizando sistema de arquivo /var/log..."
+	export FUNCAO="TESTE_VAR_LOG"
+	TESTE="/var/log"
+	PARTICAO=$(mount | grep "$TESTE")
+	if [ -z "$PARTICAO" ];then
+		gera_log2 "$FUNCAO" "FALHA" "Partição $TESTE não está em fiesystem separado"
+		return 1 
+	fi
+		
+	#OPT=$(mount | grep /home | egrep -o "([(]).([a-Z, =\)])*"| sed 's/)//g;s/(//g')
+	OPT="rw,nosuid,nodev,noexec,relatime"
+	for i in ${OPT}; do
+		RESULT=$(echo $PARTICAO | grep "$i")
+		if [ -z "$RESULT" ];then
+			gera_log2 "$FUNCAO" "FALHA" "Diretorio: $TESTE não possui o atributo: $i" 
+		else
+			gera_log2 "$FUNCAO" "SUCESSO" "Diretorio: $TESTE possui o atributo: $i"  	
+		fi		
+	done
+	
+}
+
+function get_home_filesystem()
+{
+	echo "$(status) Analizando sistema de arquivo /home..."
+	export FUNCAO="TESTE_HOME_TMP"
+	TESTE="/home"
+	PARTICAO=$(mount | grep "$TESTE")
+	if [ -z "$PARTICAO" ];then
+		gera_log2 "$FUNCAO" "FALHA" "Partição $TESTE não está em fiesystem separado"
+		return 1 
+	fi
+		
+	#OPT=$(mount | grep /home | egrep -o "([(]).([a-Z, =\)])*"| sed 's/)//g;s/(//g')
+	OPT="nodev"
+	for i in ${OPT}; do
+		RESULT=$(echo $PARTICAO | grep "$i")
+		if [ -z "$RESULT" ];then
+			gera_log2 "$FUNCAO" "FALHA" "Diretorio: $TESTE não possui o atributo: $i" 
+		else
+			gera_log2 "$FUNCAO" "SUCESSO" "Diretorio: $TESTE possui o atributo: $i"  	
+		fi		
+	done	
+}
+
+
+function get_partitions()
+{
+	echo "$(status) Analizando partições..."
+	export FUNCAO="PARTICOES_CONFIGURURACAO"
+	RESP=$(fdisk -l | egrep "^Disk /|^/dev"| tr '\n' ';'; echo)
+	if [ -z "$RESP" ];then
+		gera_log2 "$FUNCAO" "FALHA" "Não foi possivel acessar as partições"
+		return 1 
+	else
+		gera_log2 "$FUNCAO" "SUCESSO" "Lista de partições" "$RESP" 	
+	fi	
+
+}
+
+
+function get_lvm()
+{
+	echo "$(status) Analizando PVs LVM..."
+	export FUNCAO="LVM_CONFIGURURACAO"
+	RESP=$(pvs| grep -v "Attr" | tr '\n' ';'; echo)
+	if [ -z "$RESP" ];then
+		gera_log2 "$FUNCAO" "FALHA" "Sistema não possui PVs"
+		return 1 
+	else
+		gera_log2 "$FUNCAO" "SUCESSO" "Lista de PVs" "$RESP" 	
+	fi
+	
+	echo "$(status) Analizando VGs LVM..."
+	export FUNCAO="LVM_CONFIGURURACAO"
+	RESP=$(vgs| grep -v "Attr" | tr '\n' ';'; echo)
+	if [ -z "$RESP" ];then
+		gera_log2 "$FUNCAO" "FALHA" "Sistema não possui VGs"
+		return 1 
+	else
+		gera_log2 "$FUNCAO" "SUCESSO" "Lista de VGs" "$RESP" 	
+	fi
+	
+	echo "$(status) Analizando LVs LVM..."
+	export FUNCAO="LVM_CONFIGURURACAO"
+	RESP=$(lvs| grep -v "Attr" | tr '\n' ';'; echo)
+	if [ -z "$RESP" ];then
+		gera_log2 "$FUNCAO" "FALHA" "Sistema não possui LVs"
+		return 1 
+	else
+		gera_log2 "$FUNCAO" "SUCESSO" "Lista de LVs" "$RESP" 	
+	fi
+
+		
+
+}
+
+function getFstab()
+{
+    export FUNCAO="MONTAGEM_PERSISTENTE"
+	echo "$(status) Analisando pontos de montagems persistentes..."
+   
+    RESP=$(cat /etc/fstab | egrep -v "^#|^$" | tr '\n' ';'; echo)
+    gera_log2 "$FUNCAO" "INFO" "Entradas do /etc/fstab" "$RESP"
+    
+}
+
+function VerificaMontagens()
+{
+    export FUNCAO="MONTAGENS_ATIVAS"
+	echo "$(status) Analisando pontos de montagens ativos..."
+   
+   	MONTAGENS=$(mount | grep "^/dev")
+    RESP=$(echo "$MONTAGENS"| tr '\n' ';'; echo)
+    gera_log2 "$FUNCAO" "INFO" "Lista de pacotes corretivos" "$RESP"
+    
+    
+    export FUNCAO="VERIFICACAO_DE_MONTAGENS"
+    IFSOLD=$IFS
+    IFS=$'\n'
+    for m in $MONTAGENS;do
+    	DEVICE=$(echo "$m" | awk '{print $1}')
+    	DEV_PERS=""
+    	DEV_PERS=$(cat /etc/fstab | grep "$DEVICE")
+    	
+    	if [ -z "$DEV_PERS" ];then
+    		# testando se o dispositivo está configurado com UUID
+    		UUID=$(blkid "$DEVICE" |egrep -o "(UUID=).*([ ])*"|  awk '{print $1}'|awk -F"=" '{print $2}'| sed 's/\"//g')
+    		# echo "UUID: $UUID"  # debug
+    		DEV_PERS=$(cat /etc/fstab | grep "$UUID")
+    		if [ -z "$DEV_PERS" ];then
+    			gera_log2 "$FUNCAO" "FALHA" "Device não persistente. Verifique" "$DEVICE nem o $UUID"
+    		else
+    			gera_log2 "$FUNCAO" "SUCESSO" "Device persistente - UUID" "$DEVICE: $UUID"	
+    		fi
+    	else
+    		gera_log2 "$FUNCAO" "SUCESSO" "Device persistente" "$DEVICE" 	
+    	fi
+    done
+    IFS=$IFSOLD
+}
+
+
 # Tornando a função gera_log acessivel para qualquer sub-shell
 export -f gera_log
 export -f gera_log2
@@ -633,40 +895,58 @@ isRoot
 cabecalho
 getLinuxVersion
 
-getSelinux
-getHosts
-getRclocal
-getRoutes
-getCrontab
-getLimits
-getProcess
-getUsers
-getGroups
-servico_ativos
-ocupacaoDiscos
-memoria_fisica
-memoria_ram
-memoria_swap
+#getSelinux
+#getHosts
+#getRclocal
+#getRoutes
+#getCrontab
+#getLimits
+#getProcess
+#getUsers
+#getGroups
+#sgetOpenPorts
+getServicesEnabled "$TIPO_PACOTE"
+#ocupacaoDiscos
+#memoria_fisica
+#memoria_ram
+#memoria_swap
 
-search_nameserver
-valid_nameserver
-test_file
-world_writable
-nouser
-df_nouser
-nogroup
-df_nogroup
-nopasswd
-checkhome
+#search_nameserver
+#valid_nameserver
+#test_file
+#world_writable
+#nouser
+#df_nouser
+#nogroup
+#df_nogroup
+#nopasswd
+#checkhome
 
 getPackageList "$TIPO_PACOTE"
 getPackage2UpgradeCorretivo "$TIPO_PACOTE"
 getRepoList
+AnaliseRepo
 
+## Teste de file sistems
+get_tmp_filesystem
+get_var_tmp_filesystem
+get_var_log_filesystem
+get_home_filesystem
+
+
+#LVM
+get_partitions
+get_lvm
+getFstab
+VerificaMontagens
 
 # função importada do gerador de Html
 gerarRelatorio "$LOGFILE" "${HOSTNAME_ATUAL}.html"
 echo "$(status) Gerando relatório: ${HOSTNAME_ATUAL}.html e LOG:  $LOGFILE"
 
+### TODO
+# 1) Verificar serviços em execução com usuários estranhos
+# 2) Avaliar o firewall local da máquina
+# 3) configuração do sysctl
 
 ############################################################### 
