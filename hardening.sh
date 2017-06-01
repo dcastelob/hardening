@@ -3,7 +3,7 @@
 ###############################################################
 
 # Script de checagens de hardening;Diego Oliveira; Suporte Informática; 2017#
-# ver: 1.00.0007
+# ver: 1.00.0008
 
 ###############################################################
 
@@ -16,11 +16,15 @@ export VERSAO="1.08"
 export SELINUX=1
 export SILENCIOSO=1
 export TIPO_PACOTE=""
-export REDHAT=""
+export REDHAT="0"
 export IP_HOST=$(ip a | grep "inet "| awk '{print $2}'| grep -v "127.0.0.1/8" | cut -d"/" -f1| head -n1)
 export LOGFILE="hardening-${IP_HOST}-$(hostname)-$(date +"%d-%m-%Y_%T").csv"
 
-export LIMITE_ALERTA_OCUPACAO_DISCO=20
+# tipo de gerenciador de inicialização (Systemv, SystemD ou Upstart)
+export TIPO_INIT=''
+
+# percentual de destaque de ocupação dos filesystems
+export LIMITE_ALERTA_OCUPACAO_DISCO=80
 
 
 function banner()
@@ -81,8 +85,7 @@ function gera_log2 ()
 		*)
 		;;
 	esac
-	
-	
+		
 	if [ "$SILENCIOSO" -eq 1 ];then
 		#echo "$(hostname);$ROTINA;$STATUS;$CATEGORIA;\"$MENSAGEM\"" >> $LOGFILE
 		echo "$(hostname);$ROTINA;$STATUS;$CATEGORIA;\"$MENSAGEM\"" >> $LOGFILE
@@ -115,7 +118,7 @@ function cabecalho()
 	gera_log2 "$CONTROLE" "INFO" "Funcionamento desde" "$(uptime -s 2> /dev/null ||uptime 2> /dev/null)"
 	export HOSTNAME_ATUAL=$(hostname -s 2>/dev/null || hostname 2>/dev/null)
 	gera_log2 "$CONTROLE" "INFO" "Nome do computador" "$HOSTNAME_ATUAL"
-	gera_log2 "$CONTROLE" "INFO" "Nome FQDN do computador" "$(hostname -f || hostname)"
+	gera_log2 "$CONTROLE" "INFO" "Nome FQDN do computador" "$(hostname -f 2>/dev/null || hostname 2>/dev/null)"
 
 	#gera_log2 "$CONTROLE" "INFO" "Sistema Operacional" "$(cat /etc/system-release)"
 
@@ -127,6 +130,29 @@ function cabecalho()
 	#Habilita controles para Red Hat 
 	cat /etc/system-release 2>/dev/null | grep -i "Red Hat" && export REDHAT=1
 		
+}
+
+function getCpuInformation()
+{
+    echo "$(status) Obtendo dados da CPU..."
+    export TITULO="CPU - Load average"
+    export FORMATO_HTML="SUBCATEGORIZADA"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+		
+    gera_log2 "$CONTROLE" "INFO" "Média de Carga 1min, 5min, 15min" "$(uptime | awk '{print $8" "$9";"$10";"$11";"$12}')"
+	
+	export TITULO="CPU - Total de CPUs"
+    export FORMATO_HTML="SUBCATEGORIZADA"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+		
+    gera_log2 "$CONTROLE" "INFO" "Quantidade de CPUs" "$(cat /proc/cpuinfo | grep -c processor)"
+	
+	export TITULO="CPU - Informação da CPU"
+    export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+		
+    gera_log2 "$CONTROLE" "INFO" "Quantidade de CPUs" "$(lscpu 2>//dev/null | tr '\n' ';'; echo)"
+	
 }
 
 function getLinuxVersion()
@@ -265,26 +291,14 @@ function getLimits()
 	echo "$(status) Obtendo informação de agendamentos em diretórios..."
 	DADOS=$(for dir in /etc/security/limits.d;do 
 				for file in $(ls $dir);do 
-					echo -e "<p class='info'>ARQUIVO:$dir/$file</p><br/>";
-					echo
+					#echo -e "<p class='info'>ARQUIVO:$dir/$file</p><br/>";
+					echo -e "<p class='info'>ARQUIVO:$dir/$file</p>";
+					#echo
 					 
 					cat $dir/$file | grep -v "^#" | grep -v "^$" ; 
 				done; 
 			done | tr '\n' ';'; echo)		
 	gera_log2 "$CONTROLE" "INFO" "Extras do /etc/security/limits.d.*" "$DADOS"				
-}
-
-
-function getRoutes()
-{
-	# apenas para RHEL
-	echo "$(status) Obtendo informação de rotas..."
-	export TITULO="Rotas ativas"
-	export FORMATO_HTML="LISTASIMPLES"
-	export CONTROLE="$FORMATO_HTML;$TITULO"
-	
-	DADOS=$(route -n| tr '\n' ';'; echo)		
-	gera_log2 "$CONTROLE" "INFO" "Rotas e gateways do sistema" "$DADOS"			
 }
 
 function getCrontab()
@@ -313,10 +327,22 @@ function getCrontab()
 	gera_log2 "$CONTROLE" "INFO" "Extras do /etc/cron.*" "$DADOS"			
 }
 
+function getRoutes()
+{
+	# apenas para RHEL
+	echo "$(status) Obtendo informação de rotas..."
+	export TITULO="Redes - Rotas ativas"
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	DADOS=$(route -n| tr '\n' ';'; echo)		
+	gera_log2 "$CONTROLE" "INFO" "Rotas e gateways do sistema" "$DADOS"			
+}
+
 function getOpenPorts()
 {
 	echo "$(status) Obtendo lista de serviços ativos..."
-	export TITULO="Portas de serviços abertas"		
+	export TITULO="Redes - Portas de serviços abertas"		
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
@@ -329,23 +355,96 @@ function getOpenPorts()
 	done	
 }
 
+function getInternetAccess()
+{
+	echo "$(status) Obtendo informações sobre acesso a internet..."
+	export TITULO="Redes - Acesso a internet"		
+	export FORMATO_HTML="SUBCATEGORIZADA"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	ping -c1 8.8.8.8 &> /dev/null
+	RESP="$?"
+	if [ "$RESP" -eq 0 ];then
+		gera_log2 "$CONTROLE" "SUCESSO" "Acesso a internet usando Endereço IP" 
+	else
+		gera_log2 "$CONTROLE" "FALHA" "Falha no acesso a internet usando Endereço IP" 
+	fi
+	
+	ping -c1 google.com &> /dev/null
+	RESP="$?"
+	if [ "$RESP" -eq 0 ];then
+		gera_log2 "$CONTROLE" "SUCESSO" "Acesso a internet usando DNS" 
+	else
+		gera_log2 "$CONTROLE" "FALHA" "Falha no acesso a internet usando DNS" 
+	fi
+	
+}
+
+function getFirewalld()
+{
+	echo "$(status) Obtendo Configurações do Firewalld..."
+	export TITULO="Redes - Firewall - Regras Firewalld"		
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	EXISTE=""
+	EXISTE=$(ps -ef | grep "firewalld"| grep -v grep )
+	if [ -n "$EXISTE" ];then
+		REGRAS=$(firewall-cmd --list-all | tr '\n' ';'; echo)
+		gera_log2 "$CONTROLE" "INFO" "Regras do firewalld" "$REGRAS"
+	fi
+	
+}
+
 function getIptables()
 {
 	echo "$(status) Obtendo Configurações do iptables..."
-	export TITULO="Firewall - Regras Iptables"		
+	export TITULO="Redes - Firewall - Regras Iptables"		
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
 	REGRAS=$(iptables -t filter -nL| tr '\n' ';'; echo)
-	gera_log2 "$CONTROLE" "INFO" "Regras da tabela Filter" "$REGRAS"
+	gera_log2 "$CONTROLE" "INFO" "<p class='info'>Regras da tabela Filter</p>" "$REGRAS"
 	REGRAS=$(iptables -t nat -nL| tr '\n' ';'; echo)
-	gera_log2 "$CONTROLE" "INFO" "Regras da tabela NAT" "$REGRAS"
+	gera_log2 "$CONTROLE" "INFO" "<p class='info'>Regras da tabela NAT</p>" "$REGRAS"
 	REGRAS=$(iptables -t mangle -nL| tr '\n' ';'; echo)
-	gera_log2 "$CONTROLE" "INFO" "Regras da tabela Mangle" "$REGRAS"
+	gera_log2 "$CONTROLE" "INFO" "<p class='info'>Regras da tabela Mangle</p>" "$REGRAS"
 		
 	
 }
 
+function getInitManager()
+{
+	# identificando se o sistema utilizar SystemV, Systemd ou upstart
+	INIT=$(stat /proc/1/exe | grep proc | awk '{print $4}' | sed 's/[“”]//g')
+	
+	case "$INIT" in
+	"/sbin/init")
+		#echo "Entrou em: $INIT"  #DEBUG
+		INIT_2=$(stat "$INIT" | grep init | awk '{print $2}' | sed 's/[“”]//g')
+		#echo "INIT_2: $INIT_2"  #DEBUG
+		case "$INIT_2" in
+		"/sbin/init")
+			#echo "Entrou em: $INIT_2" #DEBUG
+			TIPO_INIT="SYSTEMV"
+			/sbin/init --version | grep -i -o upstart &> /dev/null && TIPO_INIT="UPSTART"
+			;;
+		"/lib/systemd/systemd")
+			#echo "Entrou em: $INIT_2"   #DEBUG
+			TIPO_INIT="SYSTEMD"
+			;;
+		esac
+		
+		;;
+	"/lib/systemd/systemd")
+		TIPO_INIT="SYSTEMD"
+		;;
+	"/sbin/upstart")
+		TIPO_INIT="UPSTART"
+		;;			
+	esac
+	
+	export $TIPO_INIT
+}
 function getServicesEnabled()
 {
     echo "$(status) Obtendo informações de serviços ativos no boot..."
@@ -354,13 +453,27 @@ function getServicesEnabled()
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
     DISTRO="$1"
-    case "$DISTRO" in
+    RESP=''
+	# identificando o tipo de gerenciador de inicialização
+	getInitManager
+	#echo "TIPO_INIT: $TIPO_INIT"  # DEBUG
+	
+	case "$DISTRO" in
         "DEB")
-            #apt list --upgradable 2> /dev/null
-            #apt-get update && \
-            # RESP=""; 
-			# RESP=\"$(apt-get -V upgrade --assume-no | grep "("| sed 's/[)(=>]//g' | awk '{print $1";"$2";"$3}'| tr '\n' ';'; echo)\"
-            ;;
+        			
+			case "$TIPO_INIT" in
+				SYSTEMV)
+				;;
+				SYSTEMD)
+				;;
+				UPSTART)
+					RESP="$RESP <p class='info'> Upstart scripts em execução </p>"	
+					RESP=$RESP$(initctl list | grep start 2>/dev/null)
+					RESP=$(echo "$RESP"| tr '\n' ';'; echo)
+					
+				;;
+			esac
+			;;
         "RPM")
         	#RHEL antigos
 			RESP=""
@@ -401,9 +514,12 @@ function ocupacaoDiscos()
 	for i in ${DISCOS}; do
 		OCUPADO=''
 		OCUPADO=$(echo "$i" | cut -d";" -f3| sed 's/%//g')
+		#echo "OCUPADO: $OCUPADO, LIMITE_ALERTA_OCUPACAO_DISCO: $LIMITE_ALERTA_OCUPACAO_DISCO"  # DEBUG
 		if [ "$OCUPADO" -gt "$LIMITE_ALERTA_OCUPACAO_DISCO" ]; then
+			#echo "entrou em falha"  #DEBUG
 			STATUS_ALERTA='falha'
 		else
+			#echo "entrou em sucesso"  #DEBUG
 			STATUS_ALERTA='sucesso'
 		fi
 		gera_log2 "$CONTROLE" "INFO" "Ocupação dos Discos" $(echo "<p class='$STATUS_ALERTA'>$i</p>")
@@ -420,7 +536,7 @@ function memoria_fisica()
 	# em caso do comando não existir ou parametro inválido por conta de versão
 	lshw -short -class memory &> /dev/null
 	if  [ "$?" -ne 0 ];then
-		gera_log2 "$CONTROLE" "FALHA" "Itens de Memória física" "Comando lshw não encontrado"
+		gera_log2 "$CONTROLE" "FALHA" "Itens de Memória física" "Comando \"lshw\" não encontrado"
 		return 1
 		
 	fi
@@ -797,8 +913,6 @@ function getGroups()
 }
 
 
-
-
 function nouser() 
 {
 	echo "$(status) Checando arquivos com proprietário desconhecido..."
@@ -898,7 +1012,8 @@ function getPackageList()
     
     case "$DISTRO" in
         "DEB")
-            PKG=\"$(dpkg -l | egrep -v "^\+|^\||^Desired" |  awk '{print $1";"$2";"$3";"$4";"$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12" "$13" "$14" "$15" "$16" "$17" "$18") "$19" "$20}' | sort -t";" -k1| tr '\n' ';'; echo)\"
+            PKG=\"$(dpkg -l | egrep -v "^\+|^\||^Desired" |  awk '{print $1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12" "$13" "$14" "$15" "$16" "$17" "$18" "$19" "$20}' | sort -t";" -k1| tr '\n' ';'; echo)\"
+			#PKG=\"$(dpkg -l | egrep -v "^\+|^\||^Desired" |  awk '{print $1";"$2";"$3";"$4";"$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12" "$13" "$14" "$15" "$16" "$17" "$18") "$19" "$20}' | sort -t";" -k1| tr '\n' ';'; echo)\"
             #PKG=\"$(dpkg -l | egrep -v "^\+|^\||^Desired" |  awk '{print $1";"$2";"$3";"$4";"$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12" "$13" "$14" "$15" "$16" "$17" "$18") "$19" "$20}' | sort -t";" -k1)\"
             ;;
         "RPM")
@@ -913,14 +1028,23 @@ function getPackageList()
 
 function getRepoList()
 {
-	# apenas para RHEL
 	echo "$(status) Obtendo repositórios ativos..."
-	export TITULO="Pacotes - Repositóris ativos"
+	export TITULO="Pacotes - Repositórios ativos"
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	REPO=$(yum repolist | grep status -A 500 | grep -v ^repolist| tr '\n' ';'; echo)		
-	gera_log2 "$CONTROLE" "INFO" "Lista de Repositório" "$REPO"			
+	case "$DISTRO" in
+        "DEB")
+            REPO=$(cat /etc/apt/sources.list | egrep -v "^#|^$" | tr '\n' ';'; echo)		
+			gera_log2 "$CONTROLE" "INFO" "Lista de Repositórios" "$REPO"	
+            ;;
+        "RPM")
+            REPO=$(yum repolist | grep status -A 500 | grep -v ^repolist| tr '\n' ';'; echo)		
+			gera_log2 "$CONTROLE" "INFO" "Lista de Repositórios" "$REPO"	
+            ;;    
+    esac
+	
+			
 }
 
 function getRepolistRedHat()
@@ -963,65 +1087,72 @@ function AnaliseRepo()
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	FILES=$(ls /etc/yum.repos.d/)
-	for file in $FILES; do
-		IFSOLD="$IFS"
-		IFS=$'\n'
-		REPO=""
-		CONT=1
-		STATUS="SUCESSO"
-		
-		# echo "File: $file" #DEBUG
-		
-		# Testa se vai existir repositório ativo no arquivo. Caso exista mais de um, ele avalia todos.
-		EXISTE_ATIVO=$(cat /etc/yum.repos.d/$file | egrep -v "^#|^$"| tr "\n" ";"| sed "s/\[/\n\[/g"| grep -v "enabled=0")
-		
-		if [ -n "$EXISTE_ATIVO" ];then
-			#for i in $(cat /etc/yum.repos.d/$file | tr "\n" ";"| sed "s/\[/\n\[/g"| grep "enabled=1"); do 
-			for LINE in $(cat /etc/yum.repos.d/$file | egrep -v "^#|^$"| tr "\n" ";"| sed "s/\[/\n\[/g"| grep -v "enabled=0"); do 
-				#REPO="$REPO"$(echo -e "ARQUIVO: /etc/yum.repos.d/$file\n"; echo "$i" | egrep "\[|^name|enabled|gpgcheck|gpgkey" | tr '\n' ';'; echo)
-				#if [ "$CONT" -eq 1 ]; then
-				#	REPO="$REPO"$(echo -e "<b>ARQUIVO: /etc/yum.repos.d/$file</b><br/>\n")
-				#fi
-				#echo "Valor LINE: $LINE"  #DEBUG
-				#REPO="$REPO"$(echo "$LINE" | egrep "\[|^name|gpgcheck|gpgkey" | tr '\n' ';'; echo )
-				
-				IFSOLD2="$IFS"
-				IFS=";"
-				
+	case "$DISTRO" in
+        "DEB")
+            echo "Em construção..."
+			#gera_log2 "$CONTROLE" "INFO" "Lista de Repositório" "$REPO"	
+            ;;
+        "RPM")
+			FILES=$(ls /etc/yum.repos.d/)
+			for file in $FILES; do
+				IFSOLD="$IFS"
+				IFS=$'\n'
 				REPO=""
-				for REPOAVULSO in ${LINE}; do
-					#echo "Valor REPOAVULSO: ${REPOAVULSO}"   #DEBUG
-					
-					REPO="$REPO"$(echo "$REPOAVULSO" | egrep "\[|^name|gpgcheck|gpgkey" | tr '\n' ';'; echo )
-					CONT=$(($CONT+1))
-					
-					GPGCHECK=""
-					GPGCHECK=$(echo "$REPO" | grep "gpgcheck=0")
-					
-					if [ -n "$GPGCHECK" ];then
-						STATUS="FALHA"
-					fi
-					#echo "Valor de REPO: $REPO"  # DEBUG
-					
-				done
-				if [ -n "$REPO" ]; then
-					#echo "$REPO" #DEBUG
-					gera_log2 "$CONTROLE" "$STATUS" "repo: etc/yum.repos.d/$file" "$REPO"
+				CONT=1
+				STATUS="SUCESSO"
+				
+				# echo "File: $file" #DEBUG
+				
+				# Testa se vai existir repositório ativo no arquivo. Caso exista mais de um, ele avalia todos.
+				EXISTE_ATIVO=$(cat /etc/yum.repos.d/$file | egrep -v "^#|^$"| tr "\n" ";"| sed "s/\[/\n\[/g"| grep -v "enabled=0")
+				
+				if [ -n "$EXISTE_ATIVO" ];then
+					#for i in $(cat /etc/yum.repos.d/$file | tr "\n" ";"| sed "s/\[/\n\[/g"| grep "enabled=1"); do 
+					for LINE in $(cat /etc/yum.repos.d/$file | egrep -v "^#|^$"| tr "\n" ";"| sed "s/\[/\n\[/g"| grep -v "enabled=0"); do 
+						#REPO="$REPO"$(echo -e "ARQUIVO: /etc/yum.repos.d/$file\n"; echo "$i" | egrep "\[|^name|enabled|gpgcheck|gpgkey" | tr '\n' ';'; echo)
+						#if [ "$CONT" -eq 1 ]; then
+						#	REPO="$REPO"$(echo -e "<b>ARQUIVO: /etc/yum.repos.d/$file</b><br/>\n")
+						#fi
+						#echo "Valor LINE: $LINE"  #DEBUG
+						#REPO="$REPO"$(echo "$LINE" | egrep "\[|^name|gpgcheck|gpgkey" | tr '\n' ';'; echo )
+						
+						IFSOLD2="$IFS"
+						IFS=";"
+						
+						REPO=""
+						for REPOAVULSO in ${LINE}; do
+							#echo "Valor REPOAVULSO: ${REPOAVULSO}"   #DEBUG
+							
+							REPO="$REPO"$(echo "$REPOAVULSO" | egrep "\[|^name|gpgcheck|gpgkey" | tr '\n' ';'; echo )
+							CONT=$(($CONT+1))
+							
+							GPGCHECK=""
+							GPGCHECK=$(echo "$REPO" | grep "gpgcheck=0")
+							
+							if [ -n "$GPGCHECK" ];then
+								STATUS="FALHA"
+							fi
+							#echo "Valor de REPO: $REPO"  # DEBUG
+							
+						done
+						if [ -n "$REPO" ]; then
+							#echo "$REPO" #DEBUG
+							gera_log2 "$CONTROLE" "$STATUS" "repo: etc/yum.repos.d/$file" "$REPO"
+						else
+							gera_log2 "$CONTROLE" "FALHA" "Não foi encontrado repositório ativo no arquivo: $file"
+						fi
+					done
 				else
 					gera_log2 "$CONTROLE" "FALHA" "Não foi encontrado repositório ativo no arquivo: $file"
 				fi
+				IFS="$IFSOLD"
+				
 			done
-		else
-			gera_log2 "$CONTROLE" "FALHA" "Não foi encontrado repositório ativo no arquivo: $file"
-		fi
-		IFS="$IFSOLD"
-		
-	done
 
-	# adicionando um enter após os dados
-	#REPO="$REPO"$(echo '<br />')
-	#gera_log2 "$CONTROLE" "INFO" "Analise dos Repositórios ativos" "$REPO"			
+			
+            ;;    
+    esac
+		
 }
 
 function getSummaryPackage2UpgradeCorretivo()
@@ -1436,14 +1567,14 @@ function getWebServer()
     RESP=$(ps -ef | egrep "http|apache|tomcat" | grep -v grep | awk '{print $8}' | uniq | tr '\n' ' '; echo)
 	#echo "Valor RESP: $RESP"  #debug
 	if [ -n "$RESP" ];then
-			APP=$(echo "$RESP" | egrep -o "httpd|apache|tomcat.*")
+			APP=$(echo "$RESP" | egrep -o "httpd|apache.*|tomcat.*")
 			case "$APP" in
-				httpd|apache) 
+				httpd|apache|apache2) 
 					gera_log2 "$CONTROLE" "SUCESSO" "Processo httpd" "$APP"
 					RESULTADO=$(eval "$APP -V | tr '\n' ';'; echo")
 					gera_log2 "$CONTROLE" "SUCESSO" "Versão httpd" "$RESULTADO"
 				;;
-				tomcat)
+				tomcat|tomcat6|tomcat7|tomcat8)
 				;;
 			esac
 		
@@ -1489,10 +1620,10 @@ isRoot
 cabecalho
 getLinuxVersion
 
+getCpuInformation
 getSelinux
 getHosts
 getRclocal
-getRoutes
 getCrontab
 getLimits
 getProcess
@@ -1506,19 +1637,22 @@ getSudoers
 getGroups
 
 ### Redes
+getInternetAccess
+getRoutes
+getFirewalld
 getIptables
 getOpenPorts
 
 ### Testes de memoria
-memoria_fisica
-memoria_ram
-memoria_swap
+#memoria_fisica
+#memoria_ram
+#memoria_swap
 
 ### Testes de DNS
-search_nameserver
-valid_nameserver
-consulteMyName
-consultaIPreverso
+#search_nameserver
+#valid_nameserver
+#consulteMyName
+#consultaIPreverso
 
 
 ### Teste de arquivos
@@ -1532,12 +1666,12 @@ consultaIPreverso
 #checkhome
 
 ### repositórios e pacotes
-#getPackageList "$TIPO_PACOTE"
-#getSummaryPackage2UpgradeCorretivo "$TIPO_PACOTE"
-#getPackage2UpgradeCorretivo "$TIPO_PACOTE"
-#getRepoList
-#getRepolistRedHat
-#AnaliseRepo
+getPackageList "$TIPO_PACOTE"
+getSummaryPackage2UpgradeCorretivo "$TIPO_PACOTE"
+getPackage2UpgradeCorretivo "$TIPO_PACOTE"
+getRepoList
+getRepolistRedHat
+AnaliseRepo
 
 
 ### Teste de file sistems
@@ -1568,7 +1702,6 @@ echo "$(status) Gerando relatório: ${IP_HOST}-${HOSTNAME_ATUAL}.html e LOG:  $L
 
 ### TODO
 # 1) Verificar serviços em execução com usuários estranhos
-# 2) Avaliar o firewall local da máquina
 # 3) configuração do sysctl
 
 ############################################################### 
