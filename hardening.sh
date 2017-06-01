@@ -3,7 +3,7 @@
 ###############################################################
 
 # Script de checagens de hardening;Diego Oliveira; Suporte Informática; 2017#
-# ver: 1.00.0008
+# ver: 1.00.0009
 
 ###############################################################
 
@@ -12,7 +12,7 @@ source geradorRelatorioHtml.sh
 
 # Parametros Globais
 
-export VERSAO="1.08"
+export VERSAO="1.09"
 export SELINUX=1
 export SILENCIOSO=1
 export TIPO_PACOTE=""
@@ -138,8 +138,19 @@ function getCpuInformation()
     export TITULO="CPU - Load average"
     export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
-		
-    gera_log2 "$CONTROLE" "INFO" "Média de Carga 1min, 5min, 15min" "$(uptime | awk '{print $8" "$9";"$10";"$11";"$12}')"
+	
+	RESULTADO=$(uptime | awk '{print $5}')
+	if [ "$RESULTADO" == 'load' ];then
+		DADOS=$(uptime | sed 's/, /;/g' | awk '{print $7";"$8";"$9}' )
+	else
+		RESULTADO=$(uptime | awk '{print $6}')
+		if [ "$RESULTADO" == 'load' ];then
+			DADOS=$(uptime | sed 's/, /;/g' | awk '{print $8";"$9";"$10}')	
+		else
+			DADOS=$(uptime | sed 's/, /;/g' | awk '{print $9";"$10";"$11}')	
+		fi
+	fi		
+    gera_log2 "$CONTROLE" "INFO" "Média de Carga 1min, 5min, 15min" "$DADOS"
 	
 	export TITULO="CPU - Total de CPUs"
     export FORMATO_HTML="SUBCATEGORIZADA"
@@ -194,6 +205,52 @@ function getKernel()
 	#uname -a
     gera_log2 "$CONTROLE" "INFO" "Sistema Operacional" "$(uname -a)"
 }
+
+function getTimeZone()
+{
+    echo "$(status) Obtendo dados do configurações regionais..."
+    export TITULO="Configurações regionais"
+    export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	timedatectl &> /dev/null
+	RESP="$?"
+	if [ "$RESP" -eq 0 ];then
+		DADOS=$(timedatectl | tr '\n' ';'; echo)
+		gera_log2 "$CONTROLE" "INFO" "Informações de Timezone" "$DADOS"
+	else 
+		DADOS=$(date +"%d-%m-%Y %T %Z (%z)" | tr '\n' ';'; echo)
+		if [ -e "/etc/sysconfig/clock" ];then
+			DADOS=$DADOS$(cat /etc/sysconfig/clock | tr '\n' ';'; echo)			
+		fi
+		gera_log2 "$CONTROLE" "INFO" "Informações de Timezone" "$DADOS"		
+	fi
+	    
+    # cat /etc/locale.conf 
+}
+
+
+function getConfereDateTime()
+{
+    echo "$(status) Obtendo dados do configurações de horário..."
+    export TITULO="Configurações de horário"
+    export FORMATO_HTML="SUBCATEGORIZADA"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	HORA_EXTERNA=$(curl -s --url "http://www.horariodebrasilia.org" | grep '<p id="relogio">' | egrep -o "([0-9]){2}\:([0-9]{2})\:([0-9]){2}")
+	HORA_LOCAL=$(date "+%H:%M:%S")
+	
+	if [ "$HORA_EXTERNA" ==  "$HORA_LOCAL" ];then
+		STATUS="SUCESSO"
+		
+	else 
+		STATUS="FALHA"
+	fi
+	    
+    gera_log2 "$CONTROLE" "$STATUS" "Verificação de horários" "Hora Externa: $HORA_EXTERNA. Hora Local: $HORA_LOCAL"
+}
+
+
 
 function getHosts()
 {
@@ -415,12 +472,13 @@ function getIptables()
 function getInitManager()
 {
 	# identificando se o sistema utilizar SystemV, Systemd ou upstart
-	INIT=$(stat /proc/1/exe | grep proc | awk '{print $4}' | sed 's/[“”]//g')
-	
-	case "$INIT" in
-	"/sbin/init")
-		#echo "Entrou em: $INIT"  #DEBUG
-		INIT_2=$(stat "$INIT" | grep init | awk '{print $2}' | sed 's/[“”]//g')
+	#echo "Entrou na getInitManager"
+	INIT_1=$(stat /proc/1/exe | grep proc | awk '{print $4}' | sed 's/[“”""]//g')
+	#echo "INIT_1: $INIT_1"
+	case "$INIT_1" in
+	"/sbin/init"|/sbin/init)
+		#echo "Entrou em: $INIT_1"  #DEBUG
+		INIT_2=$(stat "$INIT_1" | grep init | awk '{print $2}' | sed 's/[“”""]//g')
 		#echo "INIT_2: $INIT_2"  #DEBUG
 		case "$INIT_2" in
 		"/sbin/init")
@@ -428,19 +486,20 @@ function getInitManager()
 			TIPO_INIT="SYSTEMV"
 			/sbin/init --version | grep -i -o upstart &> /dev/null && TIPO_INIT="UPSTART"
 			;;
-		"/lib/systemd/systemd")
+		"/lib/systemd/systemd"|"/usr/lib/systemd/systemd")
 			#echo "Entrou em: $INIT_2"   #DEBUG
 			TIPO_INIT="SYSTEMD"
 			;;
 		esac
-		
 		;;
-	"/lib/systemd/systemd")
+	"/lib/systemd/systemd"|"/usr/lib/systemd/systemd")
 		TIPO_INIT="SYSTEMD"
 		;;
 	"/sbin/upstart")
 		TIPO_INIT="UPSTART"
-		;;			
+		;;
+	*)
+		echo "[Erro] Não é nenhuma das alternativas"				
 	esac
 	
 	export $TIPO_INIT
@@ -452,13 +511,12 @@ function getServicesEnabled()
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-    DISTRO="$1"
     RESP=''
 	# identificando o tipo de gerenciador de inicialização
 	getInitManager
 	#echo "TIPO_INIT: $TIPO_INIT"  # DEBUG
 	
-	case "$DISTRO" in
+	case "$TIPO_PACOTE" in
         "DEB")
         			
 			case "$TIPO_INIT" in
@@ -979,24 +1037,24 @@ function checkhome()
     	PERMISSAO_IDEAL="drwx------"
     fi
         
-	LISTA=$(egrep -v '(root|halt|sync|shutdown)' /etc/passwd| awk -F: '($7 != "/sbin/nologin") {print $1";"$3";"$6}')
-    for i in "$LISTA" ; do
+	LISTA=$(egrep -v '(root|halt|sync|shutdown)' /etc/passwd| awk -F: '($7 != "/sbin/nologin") {print $1" "$3" "$6}')
+    for i in $LISTA ; do
 		#Obtendo os dados
-		dir=`echo $i| cut -d";" -f3`
-		uid=`echo $i| cut -d";" -f2`
-		user=`echo $i| cut -d";" -f1`
+		dir=`echo $i| cut -d" " -f3`
+		uid=`echo $i| cut -d" " -f2`
+		user=`echo $i| cut -d" " -f1`
 		dirperm=`ls -ld $dir 2>/dev/null | cut -f1 -d" "`
-		# echo $dirperm $dir $uid $user   # debug
+		#echo "dirperm: $dirperm dir: $dir :uid $uid user: $user"   # debug
 		if [ "$dirperm" != "$PERMISSAO_IDEAL" ]; then
-			gera_log2 "$CONTROLE" "FALHA" "Permissao do diretorio Home" "$dir;$dirperm (Correta: $PERMISSAO_IDEAL)"
+			gera_log2 "$CONTROLE" "FALHA" "Permissao do diretorio Home" "Home: $dir; Permissão: $dirperm (Permissão correta: $PERMISSAO_IDEAL)"
 		else
-			gera_log2 "$CONTROLE" "SUCESSO" "Permissao do diretorio Home" "$dir;$dirperm (Correta: $PERMISSAO_IDEAL)"	
+			gera_log2 "$CONTROLE" "SUCESSO" "Permissao do diretorio Home" "Home: $dir; Permissão: $dirperm (Permissão correta: $PERMISSAO_IDEAL)"	
 		fi
 
 		correto=`ls -ldn $dir 2>/dev/null | awk '{print $3}'`
 		#if [ "$correto" -ne "$uid" ]; then
 		if [ "$correto" != "$uid" ]; then
-			gera_log2 "$CONTROLE" "FALHA" "Proprietario do diretorio Home" "$dir;$user: $uid (Correto: $correto)"
+			gera_log2 "$CONTROLE" "FALHA" "Proprietario do diretorio Home" "Home: $dir;Usuário: $user: UID: $uid (UID Correto: $correto)"
 		fi
 	done
 }
@@ -1008,9 +1066,8 @@ function getPackageList()
 	export FORMATO_HTML="LISTASIMPLES"
     export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-    DISTRO="$1"
-    
-    case "$DISTRO" in
+        
+    case "$TIPO_PACOTE" in
         "DEB")
             PKG=\"$(dpkg -l | egrep -v "^\+|^\||^Desired" |  awk '{print $1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12" "$13" "$14" "$15" "$16" "$17" "$18" "$19" "$20}' | sort -t";" -k1| tr '\n' ';'; echo)\"
 			#PKG=\"$(dpkg -l | egrep -v "^\+|^\||^Desired" |  awk '{print $1";"$2";"$3";"$4";"$5" "$6" "$7" "$8" "$9" "$10" "$11" "$12" "$13" "$14" "$15" "$16" "$17" "$18") "$19" "$20}' | sort -t";" -k1| tr '\n' ';'; echo)\"
@@ -1033,7 +1090,7 @@ function getRepoList()
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	case "$DISTRO" in
+	case "$TIPO_PACOTE" in
         "DEB")
             REPO=$(cat /etc/apt/sources.list | egrep -v "^#|^$" | tr '\n' ';'; echo)		
 			gera_log2 "$CONTROLE" "INFO" "Lista de Repositórios" "$REPO"	
@@ -1087,7 +1144,7 @@ function AnaliseRepo()
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	case "$DISTRO" in
+	case "$TIPO_PACOTE" in
         "DEB")
             echo "Em construção..."
 			#gera_log2 "$CONTROLE" "INFO" "Lista de Repositório" "$REPO"	
@@ -1162,8 +1219,7 @@ function getSummaryPackage2UpgradeCorretivo()
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-    DISTRO="$1"
-    case "$DISTRO" in
+    case "$TIPO_PACOTE" in
         "DEB")
             #apt list --upgradable 2> /dev/null
             #apt-get update && \
@@ -1209,8 +1265,7 @@ function getPackage2UpgradeCorretivo()
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-    DISTRO="$1"
-    case "$DISTRO" in
+    case "$TIPO_PACOTE" in
         "DEB")
             #apt list --upgradable 2> /dev/null
             #apt-get update && \
@@ -1591,6 +1646,71 @@ function getWebServer()
 }
 
 
+function getCertificateWebServer()
+{
+    echo "$(status) Analisando Servidores web (Certificados SSL)..."
+	export TITULO="Servidor Web - Identificando Certificados do Web Server"
+	export FORMATO_HTML="SUBCATEGORIZADA"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	RESP=""
+    RESP=$(ps -ef | egrep "http|apache|tomcat" | grep -v grep | awk '{print $8}' | uniq | tr '\n' ' '; echo)
+	#echo "Valor Existe web: $RESP"  #debug
+	if [ -n "$RESP" ];then
+			APP=$(echo "$RESP" | egrep -o "httpd|apache.*|tomcat.*")
+			#echo "Valor de app: $APP"  #debug
+			case "$APP" in
+				httpd|apache|apache2) 
+					IFSOLD=$IFS
+					IFS=$'\n'
+					LISTA_CERT=$(grep -R "^SSLCertificateFile" /etc/httpd/* )
+					#echo "LISTA_CERT: $LISTA_CERT"
+					for CERT in $LISTA_CERT; do
+						ARQUIVO=$(echo "$CERT" | awk '{print $NF}')
+						ARQUIVO_FONTE=$(echo "$CERT" | awk '{print $1}')
+						#DATA=$(date --date=$(openssl x509 -enddate -noout -in $ARQUIVO |cut -d"=" -f 2) --iso-8601)
+						
+						DATA=$(date --date=$(openssl x509 -enddate -noout -in $ARQUIVO |cut -d"=" -f 2) "+%m/%d/%Y")
+						DATA_PRINT=$(date --date=$(openssl x509 -enddate -noout -in $ARQUIVO |cut -d"=" -f 2) "+%d-%m-%Y")
+						
+						#data em timestamp
+						DATA_FIM=$(date --date="$DATA" "+%s")
+						DATA_ATUAL=$(date  "+%s")
+						#echo "DATA_FIM: $DATA_FIM, DATA_ATUAL: $DATA_ATUAL"
+						
+						STATUS="sucesso"
+						if [ "$DATA_FIM" -lt  "$DATA_ATUAL" ];then
+							STATUS="falha"
+							MSG="Vencido:"
+						else
+							STATUS="sucesso"
+							MSG="Ativo até:"	
+						fi
+						
+						gera_log2 "$CONTROLE" "INFO" "Arquivo conf: $ARQUIVO_FONTE" "$ARQUIVO;<p class='$STATUS'>$MSG $DATA_PRINT</p>"
+					done
+					IFS=$IFSOLD
+				
+				;;
+				tomcat|tomcat6|tomcat7|tomcat8)
+				;;
+				*)
+					echo "[ERRO] Nenhum tipo de opção de servidor web foi encontrada"
+				;;
+			esac
+		
+	else
+		RESP=$(netstat -ant | awk '{print $4}' | egrep ":80|:443|:8082" | tr '\n' ';'; echo)	
+		if [ -n "$RESP" ];then
+			gera_log2 "$CONTROLE" "FALHA" "Existe um servidor Web desconhecido" "$RESP"
+		else
+			gera_log2 "$CONTROLE" "INFO" "Não foram encontradas instâncias de servidor Web" 
+		fi
+		
+			
+	fi    
+}
+
 function getSSHConfig()
 {
     echo "$(status) Obtendo informações do serviço de ssh..."
@@ -1604,8 +1724,29 @@ function getSSHConfig()
 		gera_log2 "$CONTROLE" "SUCESSO" "Configurações do SSH" "$RESP"
 		
 	else
+
 		gera_log2 "$CONTROLE" "FALHA" "Não foi possivel localizar o arquivo de configuração" "$RESP"
 	fi    
+}
+
+function getVariaveisAmbiente()
+{
+	echo "$(status) Obtendo Variáveis de ambiente..."
+	export TITULO="Informação do sistema - set"		
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	RESULTADO=$(set | tr '\n' ';'; echo)
+	#gera_log2 "$CONTROLE" "INFO" "Variáveis de ambiebte - set" "$RESULTADO"
+	
+	export TITULO="Informação do sistema - env"		
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	RESULTADO=$(set | tr '\n' ';'; echo)
+	gera_log2 "$CONTROLE" "INFO" "Variáveis de ambiebte - env" "$RESULTADO"
+	
+	
 }
 
 # Tornando a função gera_log acessivel para qualquer sub-shell
@@ -1619,6 +1760,9 @@ export -f gera_log3
 isRoot
 cabecalho
 getLinuxVersion
+
+getTimeZone
+getConfereDateTime
 
 getCpuInformation
 getSelinux
@@ -1654,7 +1798,6 @@ getOpenPorts
 #consulteMyName
 #consultaIPreverso
 
-
 ### Teste de arquivos
 #test_file
 #world_writable
@@ -1666,35 +1809,38 @@ getOpenPorts
 #checkhome
 
 ### repositórios e pacotes
-getPackageList "$TIPO_PACOTE"
-getSummaryPackage2UpgradeCorretivo "$TIPO_PACOTE"
-getPackage2UpgradeCorretivo "$TIPO_PACOTE"
-getRepoList
-getRepolistRedHat
-AnaliseRepo
+#getPackageList
+#getSummaryPackage2UpgradeCorretivo
+#getPackage2UpgradeCorretivo
+#getRepoList
+#getRepolistRedHat
+#AnaliseRepo
 
 
 ### Teste de file sistems
-ocupacaoDiscos
-get_tmp_filesystem
-get_var_tmp_filesystem
-get_var_log_filesystem
-get_home_filesystem
+#ocupacaoDiscos
+#get_tmp_filesystem
+#get_var_tmp_filesystem
+#get_var_log_filesystem
+#get_home_filesystem
 
 
 ### LVM
-get_ResumePartitions
-get_partitions
-get_lvm
-getFstab
-VerificaMontagens
-getDirOcupation
+#get_ResumePartitions
+#get_partitions
+#get_lvm
+#getFstab
+#VerificaMontagens
+#getDirOcupation
 
 ### Testes serviços
-getServicesEnabled "$TIPO_PACOTE"
+getServicesEnabled
 getVMtools
 getWebServer
+getCertificateWebServer
 getSSHConfig
+
+#getVariaveisAmbiente
 
 # função importada do gerador de Html
 gerarRelatorio "$LOGFILE" "${IP_HOST}-${HOSTNAME_ATUAL}.html"

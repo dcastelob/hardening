@@ -253,7 +253,7 @@ function gerarRelatorio()
 
 	echo > "$RELATORIO"
 	header >> "$RELATORIO"
-	h1 "RESUMO DA MAQUINA" >> "$RELATORIO"
+	h1 "AVALIAÇÃO DE SERVIDOR LINUX" >> "$RELATORIO"
 	h3 "Fonte dos dados: $1" >> "$RELATORIO"
 	h3 "Relatório gerado: $2" >> "$RELATORIO"
 
