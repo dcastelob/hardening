@@ -12,11 +12,16 @@ source geradorRelatorioHtml.sh
 
 # Parametros Globais
 
-export VERSAO="1.07"
-export LOGFILE="hardening-$(hostname)-$(date +"%x_%T").csv"
+export VERSAO="1.08"
 export SELINUX=1
 export SILENCIOSO=1
 export TIPO_PACOTE=""
+export REDHAT=""
+export IP_HOST=$(ip a | grep "inet "| awk '{print $2}'| grep -v "127.0.0.1/8" | cut -d"/" -f1| head -n1)
+export LOGFILE="hardening-${IP_HOST}-$(hostname)-$(date +"%d-%m-%Y_%T").csv"
+
+export LIMITE_ALERTA_OCUPACAO_DISCO=20
+
 
 function banner()
 {
@@ -108,16 +113,20 @@ function cabecalho()
 	gera_log2 "$CONTROLE" "INFO" "Data de Apuração" "$(date +"%x %T")"
 	gera_log2 "$CONTROLE" "INFO" "Usuário executor do levantamento" "$(whoami)"
 	gera_log2 "$CONTROLE" "INFO" "Funcionamento desde" "$(uptime -s 2> /dev/null ||uptime 2> /dev/null)"
-	export HOSTNAME_ATUAL=$(hostname -s)
+	export HOSTNAME_ATUAL=$(hostname -s 2>/dev/null || hostname 2>/dev/null)
 	gera_log2 "$CONTROLE" "INFO" "Nome do computador" "$HOSTNAME_ATUAL"
-	gera_log2 "$CONTROLE" "INFO" "Nome FQDN do computador" "$(hostname -f)"
+	gera_log2 "$CONTROLE" "INFO" "Nome FQDN do computador" "$(hostname -f || hostname)"
 
 	#gera_log2 "$CONTROLE" "INFO" "Sistema Operacional" "$(cat /etc/system-release)"
 
 #	gera_log2 "$CONTROLE" "INFO" "Endereço IP do computador" "$(ip a | grep "inet "| awk '{print $2";"$7,$8";"}'| grep -v "127.0.0.1/8")"
 	gera_log2 "$CONTROLE" "INFO" "Endereço IP do computador" "$(ip a | grep "inet "| awk '{print $2" ("$7,$8");"}'| grep -v "127.0.0.1/8"| tr '\n' ' '; echo)"
 	gera_log2 "$CONTROLE" "INFO" "Versão do Kernel" "$(uname -r)"
-	gera_log2 "$CONTROLE" "INFO" "Arquitetura" "$(arch)"	
+	gera_log2 "$CONTROLE" "INFO" "Arquitetura" "$(arch)"
+	
+	#Habilita controles para Red Hat 
+	cat /etc/system-release 2>/dev/null | grep -i "Red Hat" && export REDHAT=1
+		
 }
 
 function getLinuxVersion()
@@ -163,7 +172,7 @@ function getKernel()
 function getHosts()
 {
 	echo "$(status) Obtendo informação de hosts..."
-	export TITULO="Arquivo de HOSTS (/etc/hosts)"
+	export TITULO="Arquivo de HOSTS - /etc/hosts"
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
@@ -207,19 +216,30 @@ function getRclocal()
 function getProcess()
 {
 	echo "$(status) Obtendo informação dos processos em execução..."
-	export TITULO="Processos em execução"
+	export TITULO="Processos - Processos em execução"
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	DADOS=$(ps axo uname:20,group:20,pid,ppid,tty,vsz,time,stat,ucmd | tr '\n' ';'; echo)		
+	DADOS=$(ps axo uname:20,group:20,pid,ppid,tty,vsz,time,stat,ucmd | sed "s/</'<'/g" |tr '\n' ';'; echo)		
 	gera_log2 "$CONTROLE" "INFO" "Processos em execução" "$DADOS"			
+}
+
+function getProcessPerUser()
+{
+	echo "$(status) Obtendo informação dos processos em execução por usuário..."
+	export TITULO="Processos - Total de processos por Usuário"
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	DADOS=$(ps axo uname:20 --no-heading| sort | uniq -c | sort -r | sed "s/</'<'/g" |tr '\n' ';'; echo)		
+	gera_log2 "$CONTROLE" "INFO" " Total de processos em execução por usuário " "$DADOS"			
 }
 
 function getLimits()
 {
 	# apenas para RHEL
 	echo "$(status) Obtendo informação de limites..."
-	export TITULO="Limits ativos no sistema"
+	export TITULO="Limits - Limits ativos no sistema"
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
@@ -231,21 +251,21 @@ function getLimits()
 		# Só emite se o limits.conf for encontrado
 		DADOS=$(cat $FILE|grep -v "^#"| tr '\n' ';'; echo)
 		
-		export TITULO="Limits definição de configurações padroes (Limits.conf)"
+		export TITULO="Limits - Definição de configurações padroes - Limits.conf"
 		export FORMATO_HTML="LISTASIMPLES"
 		export CONTROLE="$FORMATO_HTML;$TITULO"		
 		
 		gera_log2 "$CONTROLE" "INFO" "Configuração atual dos limits.conf" "$DADOS"
 	fi
 			
-	export TITULO="Limits - arquivos no /etc/security/limits.d"
+	export TITULO="Limits - Configurações dos arquivos no /etc/security/limits.d"
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
 	echo "$(status) Obtendo informação de agendamentos em diretórios..."
 	DADOS=$(for dir in /etc/security/limits.d;do 
 				for file in $(ls $dir);do 
-					echo -e "<strong>ARQUIVO:$dir/$file</strong><br/>";
+					echo -e "<p class='info'>ARQUIVO:$dir/$file</p><br/>";
 					echo
 					 
 					cat $dir/$file | grep -v "^#" | grep -v "^$" ; 
@@ -285,7 +305,7 @@ function getCrontab()
 	
 	DADOS=$(for dir in /etc/cron.{d,daily,hourly,monthly,weekly};do 
 				for file in $(ls $dir);do 
-					echo -e "<h3> ARQUIVO: $dir/$file</h3>";
+					echo -e "<p class='info'>ARQUIVO: $dir/$file</p>";
 					cat $dir/$file | grep -v "^#" | grep -v "^$" ; 
 					echo
 				done; 
@@ -309,6 +329,23 @@ function getOpenPorts()
 	done	
 }
 
+function getIptables()
+{
+	echo "$(status) Obtendo Configurações do iptables..."
+	export TITULO="Firewall - Regras Iptables"		
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	REGRAS=$(iptables -t filter -nL| tr '\n' ';'; echo)
+	gera_log2 "$CONTROLE" "INFO" "Regras da tabela Filter" "$REGRAS"
+	REGRAS=$(iptables -t nat -nL| tr '\n' ';'; echo)
+	gera_log2 "$CONTROLE" "INFO" "Regras da tabela NAT" "$REGRAS"
+	REGRAS=$(iptables -t mangle -nL| tr '\n' ';'; echo)
+	gera_log2 "$CONTROLE" "INFO" "Regras da tabela Mangle" "$REGRAS"
+		
+	
+}
+
 function getServicesEnabled()
 {
     echo "$(status) Obtendo informações de serviços ativos no boot..."
@@ -321,21 +358,23 @@ function getServicesEnabled()
         "DEB")
             #apt list --upgradable 2> /dev/null
             #apt-get update && \
-            RESP=\"$(apt-get -V upgrade --assume-no | grep "("| sed 's/[)(=>]//g' | awk '{print $1";"$2";"$3}'| tr '\n' ';'; echo)\"
+            # RESP=""; 
+			# RESP=\"$(apt-get -V upgrade --assume-no | grep "("| sed 's/[)(=>]//g' | awk '{print $1";"$2";"$3}'| tr '\n' ';'; echo)\"
             ;;
         "RPM")
         	#RHEL antigos
-			RESP="$RESP <h3>SystemV - Seviços ativos no boot</h3>"	
-            RESP="$RESP$(chkconfig --list 2>/dev/null;echo "<br/>")"
+			RESP=""
+			RESP="$RESP <p class='info'>SystemV - Seviços ativos no boot</p>"	
+            RESP="$RESP$(chkconfig --list 2>/dev/null| egrep "3:on|3:sim|5:on|5:sim";echo "<br/>")"
 			
 			INITTAB=$(cat /etc/inittab | grep -v "#" 2>/dev/null)
 			if [ -n "$INITTAB" ];then
-				RESP="$RESP <h3>SystemV - /etc/inittab</h3>"	
+				RESP="$RESP <p class='info'>SystemV - /etc/inittab</p>"	
 				RESP="$RESP $(cat /etc/inittab | grep -v "#" 2>/dev/null)"	
 			fi
 			
             #RESP=$RESP"SystemD - Defaul target: "$(systemctl get-default 2>/dev/null;echo "<br/>")
-            RESP="$RESP </h3> SystemD - Defaul target </h3>"	
+            RESP="$RESP <p class='info'> SystemD - Defaul target </p>"	
 			RESP="$RESP $(systemctl get-default 2>/dev/null;echo "<br/>")"
 			
 			RESP=$RESP$(systemctl list-units --type=service 2>/dev/null)
@@ -355,10 +394,19 @@ function ocupacaoDiscos()
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	DISCOS=$(df -h | grep ^/dev | awk '{print $1"("$6");"$2"/"$3";"$5}')
+	
+	
+	DISCOS=$(df -Ph | grep ^/dev | awk '{print $1"("$6");"$2"/"$3";"$5}')
 	#echo $DISCOS
 	for i in ${DISCOS}; do
-		gera_log2 "$CONTROLE" "INFO" "Ocupação dos Discos" "$i"
+		OCUPADO=''
+		OCUPADO=$(echo "$i" | cut -d";" -f3| sed 's/%//g')
+		if [ "$OCUPADO" -gt "$LIMITE_ALERTA_OCUPACAO_DISCO" ]; then
+			STATUS_ALERTA='falha'
+		else
+			STATUS_ALERTA='sucesso'
+		fi
+		gera_log2 "$CONTROLE" "INFO" "Ocupação dos Discos" $(echo "<p class='$STATUS_ALERTA'>$i</p>")
 	done	
 }
 
@@ -372,7 +420,7 @@ function memoria_fisica()
 	# em caso do comando não existir ou parametro inválido por conta de versão
 	lshw -short -class memory &> /dev/null
 	if  [ "$?" -ne 0 ];then
-		gera_log2 "$CONTROLE" "FALHOU" "Itens de Memória física" "Comando lshw não encontrado"
+		gera_log2 "$CONTROLE" "FALHA" "Itens de Memória física" "Comando lshw não encontrado"
 		return 1
 		
 	fi
@@ -460,15 +508,23 @@ function test_dns()
 	
 	URL_REFERENCIA="suporteinformatica.com"
 	IP_REFERENCIA="67.20.87.167"
-		
-	for i in ${1}; do
-		IP_TEMP=$(nslookup $URL_REFERENCIA $i | grep Address | grep -v "#53"$ | awk '{print $2}')
-		if [ "$IP_TEMP" = "$IP_REFERENCIA" ];then
-			gera_log2 "$CONTROLE" "SUCESSO" "Nameservers resolve endereços corretamente" "$i;Esperado: $IP_REFERENCIA, retornado: $IP_TEMP"
-		else
-			gera_log2 "$CONTROLE" "FALHA" "Nameservers não resolve endereços corretamente" "$i;Esperado: $IP_REFERENCIA, retornado: $IP_TEMP"
-		fi
-	done
+	
+	which nslookup &> /dev/null
+	RESP="$?"
+	
+	if [ $RESP -eq 0 ];then
+		# Só entra se o nslookup tiver instalado ou presente no path de comandos
+		for i in ${1}; do
+			IP_TEMP=$(nslookup $URL_REFERENCIA $i | grep Address | grep -v "#53"$ | awk '{print $2}')
+			if [ "$IP_TEMP" = "$IP_REFERENCIA" ];then
+				gera_log2 "$CONTROLE" "SUCESSO" "Nameservers resolve endereços corretamente" "$i;Esperado: $IP_REFERENCIA, retornado: $IP_TEMP"
+			else
+				gera_log2 "$CONTROLE" "FALHA" "Nameservers não resolve endereços corretamente" "$i;Esperado: $IP_REFERENCIA, retornado: $IP_TEMP"
+			fi
+		done
+	else
+		gera_log2 "$CONTROLE" "FALHA" "Não foi possivel utilizar a ferramenta nslookup"
+	fi
 }
 
 function valid_nameserver()
@@ -548,30 +604,38 @@ function consulteMyName()
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
 	# pode ter mais de um endereço
-	MY_HOSTNAME=$(hostname -f)
+	MY_HOSTNAME=$(hostname -f 2>/dev/null || hostname 2>/dev/null)
 	MY_ADDRERSS=$(ip a | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d"/" -f1)
 	
-	#echo "MY_ADDRERSS $MY_ADDRERSS"
-	for DNS in $(cat /etc/resolv.conf | grep nameserver | awk '{print $2}');do
-		CONSULTA=$(nslookup "$MY_HOSTNAME" "$DNS" | tr '\n' ' ')
-		#CONSULTA=$(nslookup "$MY_HOSTNAME" "$DNS" )
-		RESULT="$?"
-		#echo "CONSULTA $CONSULTA"
-		if [ "$RESULT" -ne 0 ];then
-			gera_log2 "$CONTROLE" "FALHA" "DNS não resolve para o nameserver: $DNS" "$CONSULTA"
-		else
-			ADDRERSS_DNS=$(echo "$CONSULTA" | grep Address | grep -v "#"  | awk '{print $2}')
-			#echo "ADDRERSS_DNS $ADDRERSS_DNS"
-			
-			for ADDR in $MY_ADDRERSS; do
-				if [ "$ADDRERSS_DNS" == "$ADDR" ];then
-					gera_log2 "$CONTROLE" "SUCESSO" "Nameserver: $DNS resolve corretamente" "$CONSULTA"
-				else	
-					gera_log2 "$CONTROLE" "FALHA" "DNS: $DNS não resolve o Endereço: $MY_HOSTNAME" "$(echo $CONSULTA | tr ';' ' ')"					
-				fi
-			done	
-		fi
-	done
+	which nslookup &> /dev/null
+	RESP="$?"
+	
+	if [ $RESP -eq 0 ];then
+	
+		#echo "MY_ADDRERSS $MY_ADDRERSS"
+		for DNS in $(cat /etc/resolv.conf | grep nameserver | awk '{print $2}');do
+			CONSULTA=$(nslookup "$MY_HOSTNAME" "$DNS" | tr '\n' ' ')
+			#CONSULTA=$(nslookup "$MY_HOSTNAME" "$DNS" )
+			RESULT="$?"
+			#echo "CONSULTA $CONSULTA"
+			if [ "$RESULT" -ne 0 ];then
+				gera_log2 "$CONTROLE" "FALHA" "DNS não resolve para o nameserver: $DNS" "$CONSULTA"
+			else
+				ADDRERSS_DNS=$(echo "$CONSULTA" | grep Address | grep -v "#"  | awk '{print $2}')
+				#echo "ADDRERSS_DNS $ADDRERSS_DNS"
+				
+				for ADDR in $MY_ADDRERSS; do
+					if [ "$ADDRERSS_DNS" == "$ADDR" ];then
+						gera_log2 "$CONTROLE" "SUCESSO" "Nameserver: $DNS resolve corretamente" "$CONSULTA"
+					else	
+						gera_log2 "$CONTROLE" "FALHA" "DNS: $DNS não resolve o Endereço: $MY_HOSTNAME" "$(echo $CONSULTA | tr ';' ' ')"					
+					fi
+				done	
+			fi
+		done
+	else
+		gera_log2 "$CONTROLE" "FALHA" "Não foi possivel utilizar a ferramenta nslookup"	
+	fi	
 }
 
 function consultaIPreverso()
@@ -581,29 +645,36 @@ function consultaIPreverso()
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	MY_HOSTNAME=$(hostname -f)
+	MY_HOSTNAME=$(hostname -f 2>/dev/null || hostname 2>/dev/null)
 	# pode ter mais de um endereço
 	MY_ADDRERSS=$(ip a | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d"/" -f1)
 	
-	#echo "MY_ADDRERSS $MY_ADDRERSS"
-	for DNS in $(cat /etc/resolv.conf | grep nameserver | awk '{print $2}');do
-		for ADDR in $MY_ADDRERSS; do
-			CONSULTA=$(nslookup "$ADDR" "$DNS" | tr '\n' ' ')
-			RESULT="$?"
-			
-			if [ "$RESULT" -ne 0 ];then
-				gera_log2 "$CONTROLE" "FALHA" "DNS não resolve para o nameserver: $DNS" "$CONSULTA"
-			else
-				NAME_DNS=$(echo "$CONSULTA" | grep Name | grep -v "#"  | awk '{print $2}')
-				#echo "NAME_DNS $NAME_DNS"
-				if [ "$NAME_DNS" == "$MY_HOSTNAME" ];then
-					gera_log2 "$CONTROLE" "SUCESSO" "Nameserver: $DNS resolve corretamente $ADDR em $MY_HOSTNAME" "$CONSULTA"
-				else	
-					gera_log2 "$CONTROLE" "FALHA" "DNS: $DNS não resolve o Endereço: $ADDR" "$(echo $CONSULTA | tr ';' ' ')"					
+	which nslookup &> /dev/null
+	RESP="$?"
+	
+	if [ $RESP -eq 0 ];then
+		#echo "MY_ADDRERSS $MY_ADDRERSS"
+		for DNS in $(cat /etc/resolv.conf | grep nameserver | awk '{print $2}');do
+			for ADDR in $MY_ADDRERSS; do
+				CONSULTA=$(nslookup "$ADDR" "$DNS" | tr '\n' ' ')
+				RESULT="$?"
+				
+				if [ "$RESULT" -ne 0 ];then
+					gera_log2 "$CONTROLE" "FALHA" "DNS não resolve para o nameserver: $DNS" "$CONSULTA"
+				else
+					NAME_DNS=$(echo "$CONSULTA" | grep Name | grep -v "#"  | awk '{print $2}')
+					#echo "NAME_DNS $NAME_DNS"
+					if [ "$NAME_DNS" == "$MY_HOSTNAME" ];then
+						gera_log2 "$CONTROLE" "SUCESSO" "Nameserver: $DNS resolve corretamente $ADDR em $MY_HOSTNAME" "$CONSULTA"
+					else	
+						gera_log2 "$CONTROLE" "FALHA" "DNS: $DNS não resolve o Endereço: $ADDR" "$(echo $CONSULTA | tr ';' ' ')"					
+					fi
 				fi
-			fi
-		done	
-	done
+			done	
+		done
+	else
+		gera_log2 "$CONTROLE" "FALHA" "Não foi possivel utilizar a ferramenta nslookup"	
+	fi	
 }
 
 function test_file () {
@@ -673,7 +744,7 @@ function world_writable() {
 function getUsers()
 {
     echo "$(status) Obtendo relação de usuários do sistema..."
-    export TITULO="Relação de usuários"
+    export TITULO="Usuários - Relação de usuários"
     export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
@@ -681,16 +752,51 @@ function getUsers()
     gera_log2 "$CONTROLE" "INFO" "Lista de usuários" "\"$RES\""
 }
 
+function getUsersValidLogin()
+{
+    echo "$(status) Obtendo relação de usuários do sistema com terminal válido..."
+    export TITULO="Usuários - Usuários com terminal"
+    export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	RES=$(cat /etc/passwd | egrep "/bin/bash|/bin/sh|/bin/ksh" | sort -n -t":" -k3 | tr '\n' ';'; echo)
+    gera_log2 "$CONTROLE" "INFO" "Lista de usuários com acesso ao terminal" "\"$RES\""
+}
+
+function getRootUsers()
+{
+    echo "$(status) Obtendo relação de usuários root com UID 0..."
+    export TITULO="Usuários - \"UID 0\" Usuários Root"
+    export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	RES=$(cat /etc/passwd | grep ":x:0:" | sort -n -t":" -k3 | tr '\n' ';'; echo)
+    gera_log2 "$CONTROLE" "INFO" "Lista de usuários root" "\"$RES\""
+}
+
+function getSudoers()
+{
+    echo "$(status) Obtendo informações do sudo..."
+    export TITULO="Usuários - Configuração do  sudo"
+    export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	RES=$(cat /etc/sudoers | grep -v "^#" | grep -v "^$"| tr '\n' ';'; echo)
+    gera_log2 "$CONTROLE" "INFO" "Arquivo sudoers" "\"$RES\""
+}
+
 function getGroups()
 {
 	echo "$(status) Obtendo relação de grupos do sistema..."
-	export TITULO="Relação de Grupos"
+	export TITULO="Grupos - Relação de Grupos"
     export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
 	RES=$(cat /etc/group | sort -n -t":" -k3 | tr '\n' ';'; echo)
     gera_log2 "$CONTROLE" "INFO" "Lista de Grupos" "\"$RES\""
 }
+
+
 
 
 function nouser() 
@@ -727,7 +833,7 @@ function nogroup()
 function df_nogroup()
 {
 	echo "$(status) Checando ocupação dos arquivos com grupo proprietário desconhecido..."
-	export TITULO="OArquivos - Ocupação de aquivos de grupos desconhecidos"
+	export TITULO="Arquivos - Ocupação de aquivos de grupos desconhecidos"
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
@@ -784,7 +890,7 @@ function checkhome()
 function getPackageList()
 {
     echo "$(status) Obtendo relação de pacotes instalados no sistema..."
-	export TITULO="Pacotes - Lista de pacotes intalados"
+	export TITULO="Pacotes - Lista de pacotes instalados"
 	export FORMATO_HTML="LISTASIMPLES"
     export CONTROLE="$FORMATO_HTML;$TITULO"
 	
@@ -817,6 +923,38 @@ function getRepoList()
 	gera_log2 "$CONTROLE" "INFO" "Lista de Repositório" "$REPO"			
 }
 
+function getRepolistRedHat()
+{
+	# apenas para RHEL
+		
+	if [ "$REDHAT" -eq 1 ];then
+		echo "$(status) Obtendo repositórios Red Hat ativos..."
+		export TITULO="Pacotes Red Hat - Subscrição ativa"
+		export FORMATO_HTML="LISTASIMPLES"
+		export CONTROLE="$FORMATO_HTML;$TITULO"
+		
+		REPO=$(subscription-manager list| tr '\n' ';'; echo)		
+		gera_log2 "$CONTROLE" "INFO" "Subscrição Red Hat ativa" "$REPO"			
+		
+		#echo "$(status) Obtendo repositórios Red Hat ativos..."
+		export TITULO="Pacotes Red Hat - Repositóris ativos"
+		export FORMATO_HTML="LISTASIMPLES"
+		export CONTROLE="$FORMATO_HTML;$TITULO"
+				
+		REPO=$(subscription-manager repos| tr '\n' ';'; echo)		
+		gera_log2 "$CONTROLE" "INFO" "Repositórios ativos" "$REPO"			
+		
+		#echo "$(status) Obtendo repositórios Red Hat ativos..."
+		export TITULO="Pacotes Red Hat - Versão subscription manager"
+		export FORMATO_HTML="LISTASIMPLES"
+		export CONTROLE="$FORMATO_HTML;$TITULO"
+				
+		REPO=$(subscription-manager version| tr '\n' ';'; echo)		
+		gera_log2 "$CONTROLE" "INFO" "Versão do Red Hat subscription manager" "$REPO"			
+		
+	fi	
+}
+
 function AnaliseRepo()
 {
 	# apenas para RHEL
@@ -828,28 +966,54 @@ function AnaliseRepo()
 	FILES=$(ls /etc/yum.repos.d/)
 	for file in $FILES; do
 		IFSOLD="$IFS"
-		IFS=";"
+		IFS=$'\n'
 		REPO=""
 		CONT=1
 		STATUS="SUCESSO"
-		for i in $(cat /etc/yum.repos.d/$file | tr "\n" ";"| sed "s/\[/\n\[/g"| grep "enabled=1"); do 
-			#REPO="$REPO"$(echo -e "ARQUIVO: /etc/yum.repos.d/$file\n"; echo "$i" | egrep "\[|^name|enabled|gpgcheck|gpgkey" | tr '\n' ';'; echo)
-			#if [ "$CONT" -eq 1 ]; then
-			#	REPO="$REPO"$(echo -e "<b>ARQUIVO: /etc/yum.repos.d/$file</b><br/>\n")
-			#fi
-			REPO="$REPO"$(echo "$i" | egrep "\[|^name|gpgcheck|gpgkey" | tr '\n' ';'; echo )
-			CONT=$(($CONT+1))
-			
-			GPGCHECK=""
-			GPGCHECK=$(echo "$REPO" | grep "gpgcheck=0")
-			
-			if [ -n "$GPGCHECK" ];then
-				STATUS="FALHA"
-			fi
-		done
-		if [ -n "$REPO" ]; then
-				#echo "$REPO"
-				gera_log2 "$CONTROLE" "$STATUS" "repo: etc/yum.repos.d/$file" "$REPO"
+		
+		# echo "File: $file" #DEBUG
+		
+		# Testa se vai existir repositório ativo no arquivo. Caso exista mais de um, ele avalia todos.
+		EXISTE_ATIVO=$(cat /etc/yum.repos.d/$file | egrep -v "^#|^$"| tr "\n" ";"| sed "s/\[/\n\[/g"| grep -v "enabled=0")
+		
+		if [ -n "$EXISTE_ATIVO" ];then
+			#for i in $(cat /etc/yum.repos.d/$file | tr "\n" ";"| sed "s/\[/\n\[/g"| grep "enabled=1"); do 
+			for LINE in $(cat /etc/yum.repos.d/$file | egrep -v "^#|^$"| tr "\n" ";"| sed "s/\[/\n\[/g"| grep -v "enabled=0"); do 
+				#REPO="$REPO"$(echo -e "ARQUIVO: /etc/yum.repos.d/$file\n"; echo "$i" | egrep "\[|^name|enabled|gpgcheck|gpgkey" | tr '\n' ';'; echo)
+				#if [ "$CONT" -eq 1 ]; then
+				#	REPO="$REPO"$(echo -e "<b>ARQUIVO: /etc/yum.repos.d/$file</b><br/>\n")
+				#fi
+				#echo "Valor LINE: $LINE"  #DEBUG
+				#REPO="$REPO"$(echo "$LINE" | egrep "\[|^name|gpgcheck|gpgkey" | tr '\n' ';'; echo )
+				
+				IFSOLD2="$IFS"
+				IFS=";"
+				
+				REPO=""
+				for REPOAVULSO in ${LINE}; do
+					#echo "Valor REPOAVULSO: ${REPOAVULSO}"   #DEBUG
+					
+					REPO="$REPO"$(echo "$REPOAVULSO" | egrep "\[|^name|gpgcheck|gpgkey" | tr '\n' ';'; echo )
+					CONT=$(($CONT+1))
+					
+					GPGCHECK=""
+					GPGCHECK=$(echo "$REPO" | grep "gpgcheck=0")
+					
+					if [ -n "$GPGCHECK" ];then
+						STATUS="FALHA"
+					fi
+					#echo "Valor de REPO: $REPO"  # DEBUG
+					
+				done
+				if [ -n "$REPO" ]; then
+					#echo "$REPO" #DEBUG
+					gera_log2 "$CONTROLE" "$STATUS" "repo: etc/yum.repos.d/$file" "$REPO"
+				else
+					gera_log2 "$CONTROLE" "FALHA" "Não foi encontrado repositório ativo no arquivo: $file"
+				fi
+			done
+		else
+			gera_log2 "$CONTROLE" "FALHA" "Não foi encontrado repositório ativo no arquivo: $file"
 		fi
 		IFS="$IFSOLD"
 		
@@ -886,7 +1050,7 @@ function getSummaryPackage2UpgradeCorretivo()
 				#echo "EXISTE $EXISTE"
 				if [ -z "$EXISTE" ];then
 					ERRO="Nenhum formato de verificação de atualização de Segurança disponível (yum install -y yum-plugin-security || yum install -y yum-security)"
-					gera_log2 "$CONTROLE" "FALHA" "Yum não pode verificar atualizações de segurança yum install -y yum-plugin-security || yum install -y yum-security)" "$ERRO"
+					gera_log2 "$CONTROLE" "FALHA" "O Yum não pode verificar atualizações de segurança (yum install -y yum-plugin-security || yum install -y yum-security)" "$ERRO"
 				else
 					case "$EXISTE" in
 						yum-plugin-security)
@@ -933,7 +1097,7 @@ function getPackage2UpgradeCorretivo()
 				#echo "EXISTE $EXISTE"
 				if [ -z "$EXISTE" ];then
 					ERRO="Nenhum formato de verificação de atualização de Segurança disponível (yum install -y yum-plugin-security || yum install -y yum-security)"
-					gera_log2 "$CONTROLE" "FALHA" "Yum não pode verificar atualizações de segurança yum install -y yum-plugin-security || yum install -y yum-security)" "$ERRO"
+					gera_log2 "$CONTROLE" "FALHA" "O Yum não pode verificar atualizações de segurança (yum install -y yum-plugin-security || yum install -y yum-security)" "$ERRO"
 				else
 					case "$EXISTE" in
 						yum-plugin-security)
@@ -959,7 +1123,7 @@ function getPackage2UpgradeCorretivo()
 
 function get_tmp_filesystem()
 {
-	echo "$(status) Analizando sistema de arquivo /tmp..."
+	echo "$(status) Analisando sistema de arquivo /tmp..."
 	export TITULO="Filesystem - Teste do /tmp"
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
@@ -967,14 +1131,18 @@ function get_tmp_filesystem()
 	TESTE="/tmp"
 	PARTICAO=$(mount | grep "$TESTE")
 	if [ -z "$PARTICAO" ];then
-		gera_log2 "$CONTROLE" "FALHA" "Partição $TESTE não está em fiesystem separado"
-		return 1 
+		gera_log2 "$CONTROLE" "FALHA" "Partição $TESTE não está em filesystem separado"
+		return 1
+	else
+		gera_log2 "$CONTROLE" "SUCESSO" "Partição $TESTE está em filesystem separado"
 	fi
 		
 	#OPT=$(mount | grep /home | egrep -o "([(]).([a-Z, =\)])*"| sed 's/)//g;s/(//g')
-	OPT="rw,nosuid,nodev,noexec,relatime"
-	for i in ${OPT}; do
+	#OPT="rw nosuid nodev noexec relatime"
+	#for i in $OPT; do
+	for i in rw nosuid nodev noexec relatime; do
 		RESULT=$(echo $PARTICAO | grep "$i")
+		#echo "RESULT :$RESULT, Item: $i "
 		if [ -z "$RESULT" ];then
 			gera_log2 "$CONTROLE" "FALHA" "Diretorio: $TESTE não possui o atributo: $i" 
 		else
@@ -985,7 +1153,7 @@ function get_tmp_filesystem()
 
 function get_var_tmp_filesystem()
 {
-	echo "$(status) Analizando sistema de arquivo /var/tmp..."
+	echo "$(status) Analisando sistema de arquivo /var/tmp..."
 	export TITULO="Filesystem - Teste do /var/tmp"
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
@@ -993,13 +1161,15 @@ function get_var_tmp_filesystem()
 	TESTE="/var/tmp"
 	PARTICAO=$(mount | grep "$TESTE")
 	if [ -z "$PARTICAO" ];then
-		gera_log2 "$CONTROLE" "FALHA" "Partição $TESTE não está em fiesystem separado"
+		gera_log2 "$CONTROLE" "FALHA" "Partição $TESTE não está em filesystem separado"
 		return 1 
+	else
+		gera_log2 "$CONTROLE" "SUCESSO" "Partição $TESTE está em filesystem separado"
 	fi
 		
 	#OPT=$(mount | grep /home | egrep -o "([(]).([a-Z, =\)])*"| sed 's/)//g;s/(//g')
-	OPT="rw,nosuid,nodev,noexec,relatime"
-	for i in ${OPT}; do
+	#OPT="rw nosuid nodev noexec relatime"
+	for i in rw nosuid nodev noexec relatime; do
 		RESULT=$(echo $PARTICAO | grep "$i")
 		if [ -z "$RESULT" ];then
 			gera_log2 "$CONTROLE" "FALHA" "Diretorio: $TESTE não possui o atributo: $i" 
@@ -1012,7 +1182,7 @@ function get_var_tmp_filesystem()
 
 function get_var_log_filesystem()
 {
-	echo "$(status) Analizando sistema de arquivo /var/log..."
+	echo "$(status) Analisando sistema de arquivo /var/log..."
 	export TITULO="Filesystem - Teste do /var/log"
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
@@ -1020,13 +1190,15 @@ function get_var_log_filesystem()
 	TESTE="/var/log"
 	PARTICAO=$(mount | grep "$TESTE")
 	if [ -z "$PARTICAO" ];then
-		gera_log2 "$CONTROLE" "FALHA" "Partição $TESTE não está em fiesystem separado"
-		return 1 
+		gera_log2 "$CONTROLE" "FALHA" "Partição $TESTE não está em filesystem separado"
+		return 1
+	else
+		gera_log2 "$CONTROLE" "SUCESSO" "Partição $TESTE está em filesystem separado"		
 	fi
 		
 	#OPT=$(mount | grep /home | egrep -o "([(]).([a-Z, =\)])*"| sed 's/)//g;s/(//g')
-	OPT="rw,nosuid,nodev,noexec,relatime"
-	for i in ${OPT}; do
+	#OPT="rw nosuid nodev noexec relatime"
+	for i in rw nosuid nodev noexec relatime; do
 		RESULT=$(echo $PARTICAO | grep "$i")
 		if [ -z "$RESULT" ];then
 			gera_log2 "$CONTROLE" "FALHA" "Diretorio: $TESTE não possui o atributo: $i" 
@@ -1039,7 +1211,7 @@ function get_var_log_filesystem()
 
 function get_home_filesystem()
 {
-	echo "$(status) Analizando sistema de arquivo /home..."
+	echo "$(status) Analisando sistema de arquivo /home..."
 	export TITULO="Filesystem - Teste do /home"
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
@@ -1047,13 +1219,15 @@ function get_home_filesystem()
 	TESTE="/home"
 	PARTICAO=$(mount | grep "$TESTE")
 	if [ -z "$PARTICAO" ];then
-		gera_log2 "$CONTROLE" "FALHA" "Partição $TESTE não está em fiesystem separado"
-		return 1 
+		gera_log2 "$CONTROLE" "FALHA" "Partição $TESTE não está em filesystem separado"
+		return 1
+	else
+		gera_log2 "$CONTROLE" "SUCESSO" "Partição $TESTE está em filesystem separado"
 	fi
 		
 	#OPT=$(mount | grep /home | egrep -o "([(]).([a-Z, =\)])*"| sed 's/)//g;s/(//g')
-	OPT="nodev"
-	for i in ${OPT}; do
+	#OPT="nodev"
+	for i in nodev; do
 		RESULT=$(echo $PARTICAO | grep "$i")
 		if [ -z "$RESULT" ];then
 			gera_log2 "$CONTROLE" "FALHA" "Diretorio: $TESTE não possui o atributo: $i" 
@@ -1066,7 +1240,7 @@ function get_home_filesystem()
 
 function get_partitions()
 {
-	echo "$(status) Analizando partições..."
+	echo "$(status) Analisando partições..."
 	export TITULO="Filesystem - Configuração de partições"
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
@@ -1081,12 +1255,34 @@ function get_partitions()
 
 }
 
+function get_ResumePartitions()
+{
+	echo "$(status) Analisando resumo partições..."
+	export TITULO="Filesystem - Resumo de partições"
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	lsblk &> /dev/null
+	EXISTE="$?"
+	if [ "$EXISTE" -eq 0 ];then
+		RESP=$(lsblk | tr '\n' ';'; echo)
+		if [ -z "$RESP" ];then
+			gera_log2 "$CONTROLE" "FALHA" "Não foi possivel acessar as partições"
+			return 1 
+		else
+			gera_log2 "$CONTROLE" "SUCESSO" "Lista de partições" "$RESP" 	
+		fi
+	else
+		gera_log2 "$CONTROLE" "FALHA" "Não possui o comando \"lsblk\" no sistema."  	
+	fi	
+
+}
 
 function get_lvm()
 {
-	echo "$(status) Analizando PVs LVM..."
-	export TITULO="Filesystem - Configurações de LVM"
-	export FORMATO_HTML="SUBCATEGORIZADA"
+	echo "$(status) Analisando PVs LVM..."
+	export TITULO="Filesystem - LVM - Configurações de PVS"
+	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
 	RESP=$(pvs 2> /dev/null | grep -v "Attr" | tr '\n' ';'; echo)
@@ -1097,9 +1293,9 @@ function get_lvm()
 		gera_log2 "$CONTROLE" "SUCESSO" "Lista de PVs" "$RESP" 	
 	fi
 	
-	echo "$(status) Analizando VGs LVM..."
-	export TITULO="Filesystem - Configurações de LVM"
-	export FORMATO_HTML="SUBCATEGORIZADA"
+	echo "$(status) Analisando VGs LVM..."
+	export TITULO="Filesystem - LVM - Configurações de VGS"
+	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
 	RESP=$(vgs| grep -v "Attr" | tr '\n' ';'; echo)
@@ -1110,9 +1306,9 @@ function get_lvm()
 		gera_log2 "$CONTROLE" "SUCESSO" "Lista de VGs" "$RESP" 	
 	fi
 	
-	echo "$(status) Analizando LVs LVM..."
-	export TITULO="Filesystem - Configurações de LVM"
-	export FORMATO_HTML="SUBCATEGORIZADA"
+	echo "$(status) Analisando LVs LVM..."
+	export TITULO="Filesystem - LVM - Configurações de LVS"
+	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
 	RESP=$(lvs| grep -v "Attr" | tr '\n' ';'; echo)
@@ -1159,7 +1355,22 @@ function VerificaMontagens()
     	DEV_PERS=$(cat /etc/fstab | grep "$DEVICE")
     	
     	if [ -z "$DEV_PERS" ];then
-    		# testando se o dispositivo está configurado com UUID
+    		
+			#Testando nome alternativo do mapper
+			
+			DEVICE_ALTERNATIVO=$(echo "$m" | awk '{print $1}' | sed 's/mapper\///g' | sed 's/-/\//g')
+			DEV_PERS=""
+			DEV_PERS=$(cat /etc/fstab | grep "$DEVICE_ALTERNATIVO")
+			
+			if [ -z "$DEV_PERS" ];then
+    			echo "" > /dev/null
+				#gera_log2 "$CONTROLE" "FALHA" "Device alternativo não persistente. Verifique" "$DEVICE_ALTERNATIVO nem o $UUID"
+    		else
+    			gera_log2 "$CONTROLE" "SUCESSO" "Device alternativo persistente" "$DEVICE: $DEVICE_ALTERNATIVO"
+				continue				
+    		fi
+			
+			# testando se o dispositivo está configurado com UUID
     		UUID=$(blkid "$DEVICE" |egrep -o "(UUID=).*([ ])*"|  awk '{print $1}'|awk -F"=" '{print $2}'| sed 's/\"//g')
     		# echo "UUID: $UUID"  # debug
     		DEV_PERS=$(cat /etc/fstab | grep "$UUID")
@@ -1181,7 +1392,7 @@ function getDirOcupation()
 	export TITULO="Filesystem - Ocupação de diretórios"
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
-	
+	RESP=""
 	RESP=$(du -h --max-depth=1 / 2>/dev/null | sort -hr | tr '\n' ';'; echo)
 	if [ -z "$RESP" ];then
 		gera_log2 "$CONTROLE" "FALHA" "Não foi possivel acessar dados da Raiz"
@@ -1214,6 +1425,58 @@ function getVMtools()
 	fi    
 }
 
+function getWebServer()
+{
+    echo "$(status) Analisando Servidores web..."
+	export TITULO="Servidor Web - Identificando serviços"
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	RESP=""
+    RESP=$(ps -ef | egrep "http|apache|tomcat" | grep -v grep | awk '{print $8}' | uniq | tr '\n' ' '; echo)
+	#echo "Valor RESP: $RESP"  #debug
+	if [ -n "$RESP" ];then
+			APP=$(echo "$RESP" | egrep -o "httpd|apache|tomcat.*")
+			case "$APP" in
+				httpd|apache) 
+					gera_log2 "$CONTROLE" "SUCESSO" "Processo httpd" "$APP"
+					RESULTADO=$(eval "$APP -V | tr '\n' ';'; echo")
+					gera_log2 "$CONTROLE" "SUCESSO" "Versão httpd" "$RESULTADO"
+				;;
+				tomcat)
+				;;
+			esac
+		
+	else
+		RESP=$(netstat -ant | awk '{print $4}' | egrep ":80|:443|:8082" | tr '\n' ';'; echo)	
+		if [ -n "$RESP" ];then
+			gera_log2 "$CONTROLE" "FALHA" "Existe um servidor Web desconhecido" "$RESP"
+		else
+			gera_log2 "$CONTROLE" "INFO" "Não foram encontradas instâncias de servidor Web" 
+		fi
+		
+			
+	fi    
+}
+
+
+function getSSHConfig()
+{
+    echo "$(status) Obtendo informações do serviço de ssh..."
+	export TITULO="SSH - Arquivo de configuração"
+	export FORMATO_HTML="LISTASIMPLES"
+	export CONTROLE="$FORMATO_HTML;$TITULO"
+	
+	RESP=""
+    RESP=$(less /etc/ssh/sshd_config | grep -v "^#" | grep -v "^$"| tr '\n' ';'; echo)
+	if [ -n "$RESP" ];then
+		gera_log2 "$CONTROLE" "SUCESSO" "Configurações do SSH" "$RESP"
+		
+	else
+		gera_log2 "$CONTROLE" "FALHA" "Não foi possivel localizar o arquivo de configuração" "$RESP"
+	fi    
+}
+
 # Tornando a função gera_log acessivel para qualquer sub-shell
 export -f gera_log
 export -f gera_log2
@@ -1221,8 +1484,8 @@ export -f gera_log3
 
 
 ## início do script, invocando as funções:
+### Funções obrigatórias
 isRoot
-
 cabecalho
 getLinuxVersion
 
@@ -1233,11 +1496,18 @@ getRoutes
 getCrontab
 getLimits
 getProcess
+getProcessPerUser
 
+### Usuários
 getUsers
+getUsersValidLogin
+getRootUsers
+getSudoers
 getGroups
+
+### Redes
+getIptables
 getOpenPorts
-getServicesEnabled "$TIPO_PACOTE"
 
 ### Testes de memoria
 memoria_fisica
@@ -1250,20 +1520,25 @@ valid_nameserver
 consulteMyName
 consultaIPreverso
 
-test_file
-world_writable
-nouser
-df_nouser
-nogroup
-df_nogroup
-nopasswd
-checkhome
 
-getPackageList "$TIPO_PACOTE"
-getSummaryPackage2UpgradeCorretivo "$TIPO_PACOTE"
-getPackage2UpgradeCorretivo "$TIPO_PACOTE"
-getRepoList
-AnaliseRepo
+### Teste de arquivos
+#test_file
+#world_writable
+#nouser
+#df_nouser
+#nogroup
+#df_nogroup
+#nopasswd
+#checkhome
+
+### repositórios e pacotes
+#getPackageList "$TIPO_PACOTE"
+#getSummaryPackage2UpgradeCorretivo "$TIPO_PACOTE"
+#getPackage2UpgradeCorretivo "$TIPO_PACOTE"
+#getRepoList
+#getRepolistRedHat
+#AnaliseRepo
+
 
 ### Teste de file sistems
 ocupacaoDiscos
@@ -1274,18 +1549,22 @@ get_home_filesystem
 
 
 ### LVM
+get_ResumePartitions
 get_partitions
 get_lvm
 getFstab
 VerificaMontagens
 getDirOcupation
 
-### Testes adicionais
+### Testes serviços
+getServicesEnabled "$TIPO_PACOTE"
 getVMtools
+getWebServer
+getSSHConfig
 
 # função importada do gerador de Html
-gerarRelatorio "$LOGFILE" "${HOSTNAME_ATUAL}.html"
-echo "$(status) Gerando relatório: ${HOSTNAME_ATUAL}.html e LOG:  $LOGFILE"
+gerarRelatorio "$LOGFILE" "${IP_HOST}-${HOSTNAME_ATUAL}.html"
+echo "$(status) Gerando relatório: ${IP_HOST}-${HOSTNAME_ATUAL}.html e LOG:  $LOGFILE"
 
 ### TODO
 # 1) Verificar serviços em execução com usuários estranhos

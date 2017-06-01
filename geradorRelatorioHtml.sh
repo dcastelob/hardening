@@ -9,7 +9,7 @@ function header()
 	echo '<meta charset="utf-8"/>'
 	echo "<head>"	
 	echo '<style type="text/css">' 
-	echo '	.tg  {border-collapse:collapse;border-spacing:0;;width:70%;}'
+	echo '	.tg  {border-collapse:collapse;border-spacing:0;;width:90%;}'
 	echo '	.tg td{font-family:Arial, sans-serif;font-size:14px;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;}'
 	#echo '	.tg th{font-family:Arial, sans-serif;font-size:14px;font-weight:normal;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;}'
 	echo '	.tg th{border-style:solid;border-width:1px;overflow:hidden;word-break:normal;font-family:Courier;text-align: justify; font-size:14px;line-height: 1.0;}'
@@ -20,13 +20,16 @@ function header()
 	echo '  .falha {color: red;}'
 	echo '  .sucesso {color: green;}'
 	echo '  .info {color: blue;}'
+	echo '  .DivCentral { width:90%; height:80%; position:absolute; left:10% }'
 	echo '</style>'
 	echo "</head>"
+	echo "<div class='DivCentral'>"
 }
 
 
 function footer()
 {
+	echo "</div>"
 	echo "</html>"
 }
 
