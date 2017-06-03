@@ -3,7 +3,7 @@
 ###############################################################
 
 # Script de checagens de hardening;Diego Oliveira; Suporte Informática; 2017#
-# ver: 1.00.0009
+# ver: 1.00.0010
 
 ###############################################################
 
@@ -12,7 +12,7 @@ source geradorRelatorioHtml.sh
 
 # Parametros Globais
 
-export VERSAO="1.09"
+export VERSAO="1.10"
 export SELINUX=1
 export SILENCIOSO=1
 export TIPO_PACOTE=""
