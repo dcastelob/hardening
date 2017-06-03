@@ -237,17 +237,21 @@ function getConfereDateTime()
     export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	HORA_EXTERNA=$(curl -s --url "http://www.horariodebrasilia.org" | grep '<p id="relogio">' | egrep -o "([0-9]){2}\:([0-9]{2})\:([0-9]){2}")
-	HORA_LOCAL=$(date "+%H:%M:%S")
+	curl &>/dev/null
+	if [ "$?" -ne 127 ];then
+		HORA_EXTERNA=$(curl -s --url "http://www.horariodebrasilia.org" | grep '<p id="relogio">' | egrep -o "([0-9]){2}\:([0-9]{2})\:([0-9]){2}")
+		HORA_LOCAL=$(date "+%H:%M:%S")
 	
-	if [ "$HORA_EXTERNA" ==  "$HORA_LOCAL" ];then
-		STATUS="SUCESSO"
+		if [ "$HORA_EXTERNA" ==  "$HORA_LOCAL" ];then
+			STATUS="SUCESSO"
 		
-	else 
-		STATUS="FALHA"
+		else 
+			STATUS="FALHA"
+		fi
+			
+		gera_log2 "$CONTROLE" "$STATUS" "Verificação de horários" "Hora Externa: $HORA_EXTERNA. Hora Local: $HORA_LOCAL"
 	fi
-	    
-    gera_log2 "$CONTROLE" "$STATUS" "Verificação de horários" "Hora Externa: $HORA_EXTERNA. Hora Local: $HORA_LOCAL"
+	
 }
 
 
@@ -259,6 +263,7 @@ function getHosts()
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
+	DADOS=''
 	DADOS=$(getent hosts| tr '\n' ';'; echo)		
 	gera_log2 "$CONTROLE" "INFO" "Configuração de /etc/hosts" "$DADOS"
 			
@@ -271,6 +276,7 @@ function getSelinux()
 	export FORMATO_HTML="SUBCATEGORIZADA"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
+	DADOS=''
 	getenforce &>/dev/null
 	if [ $? -ne 0 ];then
 		gera_log2 "$CONTROLE" "INFO" "Sistema não utiliza SELinux" "$DADOS"
@@ -472,37 +478,42 @@ function getIptables()
 function getInitManager()
 {
 	# identificando se o sistema utilizar SystemV, Systemd ou upstart
-	#echo "Entrou na getInitManager"
-	INIT_1=$(stat /proc/1/exe | grep proc | awk '{print $4}' | sed 's/[“”""]//g')
-	#echo "INIT_1: $INIT_1"
+	#echo "Entrou na getInitManager"    #‘’/lib/systemd/systemd’
+	INIT_1=$(stat /proc/1/exe | grep proc | awk '{print $4}' | sed 's/[“”""‘’'']//g')
+	INIT_1=$(echo "$INIT_1"| egrep -o "init|systemd|upstart"|uniq )
+	#echo "INIT_1: |${INIT_1}|"
 	case "$INIT_1" in
-	"/sbin/init"|/sbin/init)
+	"/sbin/init"|"/sbin/init"|"init")
 		#echo "Entrou em: $INIT_1"  #DEBUG
-		INIT_2=$(stat "$INIT_1" | grep init | awk '{print $2}' | sed 's/[“”""]//g')
+		INIT_2=$(stat "$INIT_1" | grep init | awk '{print $2}' | sed 's/[“”""‘’'']//g')
+		INIT_2=$(echo "$INIT_2"| egrep -o "init|systemd|upstart"|uniq )
 		#echo "INIT_2: $INIT_2"  #DEBUG
 		case "$INIT_2" in
-		"/sbin/init")
+		"/sbin/init"|"init")
 			#echo "Entrou em: $INIT_2" #DEBUG
 			TIPO_INIT="SYSTEMV"
 			/sbin/init --version | grep -i -o upstart &> /dev/null && TIPO_INIT="UPSTART"
 			;;
-		"/lib/systemd/systemd"|"/usr/lib/systemd/systemd")
+		"systemd"|"/lib/systemd/systemd"|"/usr/lib/systemd/systemd")
 			#echo "Entrou em: $INIT_2"   #DEBUG
 			TIPO_INIT="SYSTEMD"
 			;;
 		esac
 		;;
-	"/lib/systemd/systemd"|"/usr/lib/systemd/systemd")
+	systemd|"/lib/systemd/systemd"|"/usr/lib/systemd/systemd")
 		TIPO_INIT="SYSTEMD"
 		;;
-	"/sbin/upstart")
+	upstart|"/sbin/upstart")
 		TIPO_INIT="UPSTART"
 		;;
 	*)
-		echo "[Erro] Não é nenhuma das alternativas"				
+		echo "[Erro] Não é nenhuma das alternativas"
+		;;				
 	esac
 	
-	export $TIPO_INIT
+	if [ -n "$TIPO_INIT" ];then
+		export $TIPO_INIT
+	fi
 }
 function getServicesEnabled()
 {
@@ -1736,14 +1747,14 @@ function getVariaveisAmbiente()
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	RESULTADO=$(set | tr '\n' ';'; echo)
+	#RESULTADO=$(set | tr '\n' ';'; echo)
 	#gera_log2 "$CONTROLE" "INFO" "Variáveis de ambiebte - set" "$RESULTADO"
 	
 	export TITULO="Informação do sistema - env"		
 	export FORMATO_HTML="LISTASIMPLES"
 	export CONTROLE="$FORMATO_HTML;$TITULO"
 	
-	RESULTADO=$(set | tr '\n' ';'; echo)
+	RESULTADO=$(env | tr '\n' ';'; echo)
 	gera_log2 "$CONTROLE" "INFO" "Variáveis de ambiebte - env" "$RESULTADO"
 	
 	
@@ -1788,50 +1799,50 @@ getIptables
 getOpenPorts
 
 ### Testes de memoria
-#memoria_fisica
-#memoria_ram
-#memoria_swap
+memoria_fisica
+memoria_ram
+memoria_swap
 
 ### Testes de DNS
-#search_nameserver
-#valid_nameserver
-#consulteMyName
-#consultaIPreverso
+search_nameserver
+valid_nameserver
+consulteMyName
+consultaIPreverso
 
 ### Teste de arquivos
-#test_file
-#world_writable
-#nouser
-#df_nouser
-#nogroup
-#df_nogroup
-#nopasswd
-#checkhome
+test_file
+world_writable
+nouser
+df_nouser
+nogroup
+df_nogroup
+nopasswd
+checkhome
 
 ### repositórios e pacotes
-#getPackageList
-#getSummaryPackage2UpgradeCorretivo
-#getPackage2UpgradeCorretivo
-#getRepoList
-#getRepolistRedHat
-#AnaliseRepo
+getPackageList
+getSummaryPackage2UpgradeCorretivo
+getPackage2UpgradeCorretivo
+getRepoList
+getRepolistRedHat
+AnaliseRepo
 
 
 ### Teste de file sistems
-#ocupacaoDiscos
-#get_tmp_filesystem
-#get_var_tmp_filesystem
-#get_var_log_filesystem
-#get_home_filesystem
+ocupacaoDiscos
+get_tmp_filesystem
+get_var_tmp_filesystem
+get_var_log_filesystem
+get_home_filesystem
 
 
 ### LVM
-#get_ResumePartitions
-#get_partitions
-#get_lvm
-#getFstab
-#VerificaMontagens
-#getDirOcupation
+get_ResumePartitions
+get_partitions
+get_lvm
+getFstab
+VerificaMontagens
+getDirOcupation
 
 ### Testes serviços
 getServicesEnabled
